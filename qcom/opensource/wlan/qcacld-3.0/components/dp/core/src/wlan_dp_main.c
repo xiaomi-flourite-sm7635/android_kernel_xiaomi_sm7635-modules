@@ -519,17 +519,10 @@ static void dp_ini_bus_bandwidth(struct wlan_dp_psoc_cfg *config,
 static void dp_ini_tcp_settings(struct wlan_dp_psoc_cfg *config,
 				struct wlan_objmgr_psoc *psoc)
 {
-	uint32_t adv_win_scl_bit_set;
-
 	config->enable_tcp_limit_output =
 		cfg_get(psoc, CFG_DP_ENABLE_TCP_LIMIT_OUTPUT);
-	adv_win_scl_bit_set = cfg_get(psoc, CFG_DP_ENABLE_TCP_ADV_WIN_SCALE);
-	if (DP_TCP_ADV_WIN_SCL_BIT & adv_win_scl_bit_set) {
-		config->enable_tcp_adv_win_scale = true;
-		if (DP_TCP_ADV_WIN_SCALE_DISC_LOW & adv_win_scl_bit_set)
-			config->tcp_adv_win_scl_disc_lvl_low = true;
-	}
-
+	config->enable_tcp_adv_win_scale =
+		cfg_get(psoc, CFG_DP_ENABLE_TCP_ADV_WIN_SCALE);
 	config->enable_tcp_delack =
 		cfg_get(psoc, CFG_DP_ENABLE_TCP_DELACK);
 	config->tcp_delack_thres_high =
@@ -594,10 +587,31 @@ dp_nud_tracking_cfg_update(struct wlan_dp_psoc_cfg *config,
 {
 	config->enable_nud_tracking = cfg_get(psoc, CFG_DP_ENABLE_NUD_TRACKING);
 }
+
+/**
+ * dp_nud_failure_event_notify() - initialize config of nud_failure_event
+ * If enable_nud_failure_event_notify is true, after nud_failed roam fail,
+ * it will notify nud_failed event to fwk, but it won't disconncet;
+ * @config : Configuration parameters
+ * @psoc: psoc handle
+ */
+static void
+dp_nud_failure_event_notify(struct wlan_dp_psoc_cfg *config,
+				struct wlan_objmgr_psoc *psoc){
+	config->enable_nud_failure_event_notify = cfg_get(psoc,
+			CFG_DP_ENABLE_NUD_FAILURE_EVENT_NOTIFY);
+}
+
 #else
 static void
 dp_nud_tracking_cfg_update(struct wlan_dp_psoc_cfg *config,
 			   struct wlan_objmgr_psoc *psoc)
+{
+}
+
+static void
+dp_nud_failure_event_notify(struct wlan_dp_psoc_cfg *config,
+				struct wlan_objmgr_psoc *psoc)
 {
 }
 #endif
@@ -701,6 +715,19 @@ static void dp_set_rx_mode_value(struct wlan_dp_psoc_context *dp_ctx)
 }
 
 /**
+ * dp_bmiss_event_notify() - initialize bmiss event notify config
+ * If enable_bmiss_event_notify is set to true, after recv bmiss event from fw,
+ * it will notify bmiss event to fwk, but it won't disconnect(BTC);
+ */
+static void
+dp_bmiss_event_notify(struct wlan_dp_psoc_cfg *config,
+						struct wlan_objmgr_psoc *psoc)
+{
+	config->enable_bmiss_event_notify = cfg_get(psoc,
+				CFG_DP_ENABLE_BMISS_EVENT_NOTIFY);
+}
+
+/**
  * dp_cfg_init() - initialize target specific configuration
  * @ctx: dp context handle
  */
@@ -752,6 +779,8 @@ static void dp_cfg_init(struct wlan_dp_psoc_context *ctx)
 
 	dp_trace_cfg_update(config, psoc);
 	dp_nud_tracking_cfg_update(config, psoc);
+	dp_nud_failure_event_notify(config, psoc);
+	dp_bmiss_event_notify(config, psoc);
 	dp_trace_cfg_update(config, psoc);
 	dp_fisa_cfg_init(config, psoc);
 }
@@ -1028,6 +1057,8 @@ dp_link_switch_notification(struct wlan_objmgr_vdev *vdev,
 			    struct wlan_mlo_link_switch_req *lswitch_req,
 			    enum wlan_mlo_link_switch_notify_reason notify_reason)
 {
+	/* Add prints to string and print it at last, so we have only 1 print */
+	struct wlan_dp_psoc_context *dp_ctx;
 	struct wlan_dp_intf *dp_intf;
 	struct wlan_dp_link *dp_link;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
@@ -1039,6 +1070,8 @@ dp_link_switch_notification(struct wlan_objmgr_vdev *vdev,
 	 */
 	if (notify_reason != MLO_LINK_SWITCH_NOTIFY_REASON_PRE_START_POST_SER)
 		return QDF_STATUS_SUCCESS;
+
+	dp_ctx = dp_get_context();
 
 	dp_link = dp_get_vdev_priv_obj(vdev);
 	if (!is_dp_link_valid(dp_link)) {
@@ -1206,7 +1239,7 @@ dp_vdev_obj_create_notification(struct wlan_objmgr_vdev *vdev, void *arg)
 	/* Update Parent interface details */
 	dp_link->magic = WLAN_DP_LINK_MAGIC;
 	dp_link->destroyed = 0;
-	TAILQ_INIT(&dp_link->cdp_vdev_list);
+	dp_link->cdp_vdev_deleted = 0;
 	dp_link->dp_intf = dp_intf;
 	qdf_spin_lock_bh(&dp_intf->dp_link_list_lock);
 	qdf_list_insert_front(&dp_intf->dp_link_list, &dp_link->node);
@@ -1264,12 +1297,12 @@ static void dp_link_handle_cdp_vdev_delete(struct wlan_dp_psoc_context *dp_ctx,
 {
 	qdf_spin_lock_bh(&dp_ctx->dp_link_del_lock);
 
-	if (TAILQ_EMPTY(&dp_link->cdp_vdev_list)) {
-		/*
-		 * No CDP vdev is not registered for this dp_link,
-		 * hence no one will use the dp_link and
-		 * we can free this dp_link.
-		 */
+	dp_info("CDP vdev registered %d, vdev deleted %d",
+		dp_link->cdp_vdev_registered,
+		dp_link->cdp_vdev_deleted);
+
+	if (!dp_link->cdp_vdev_registered || dp_link->cdp_vdev_deleted) {
+		/* CDP vdev is not created/registered or already deleted */
 		dp_info("Free dp_link %pK id %d (" QDF_MAC_ADDR_FMT ")",
 			dp_link, dp_link->link_id,
 			QDF_MAC_ADDR_REF(dp_link->mac_addr.bytes));
@@ -2027,35 +2060,27 @@ wlan_dp_fisa_resume(struct wlan_dp_psoc_context *dp_ctx)
 }
 #endif
 
-void wlan_dp_link_cdp_vdev_delete_notification(ol_osif_vdev_handle context,
-					       struct cdp_vdev *cdp_vdev)
+void wlan_dp_link_cdp_vdev_delete_notification(void *context)
 {
 	struct wlan_dp_link *dp_link = (struct wlan_dp_link *)context;
 	struct wlan_dp_link *tmp_dp_link;
+	struct wlan_dp_intf *dp_intf = NULL;
 	struct wlan_dp_psoc_context *dp_ctx = NULL;
 	uint8_t found = 0;
 
 	/* dp_link will not be freed before this point. */
-	if (!dp_link || dp_link->magic != WLAN_DP_LINK_MAGIC) {
-		dp_info("dp_link %pK magic 0x%llx", dp_link,
-			dp_link ? dp_link->magic : 0xDEADDEAD);
+	if (!dp_link) {
+		dp_info("dp_link is null");
 		return;
 	}
 
-	dp_info("dp_link %pK id %d mac (" QDF_MAC_ADDR_FMT ")",
-		dp_link, dp_link->link_id,
-		QDF_MAC_ADDR_REF(dp_link->mac_addr.bytes));
-
-	dp_ctx = dp_get_context();
+	dp_info("dp_link %pK id %d", dp_link, dp_link->link_id);
+	dp_intf = dp_link->dp_intf;
+	dp_ctx = dp_intf->dp_ctx;
 
 	qdf_spin_lock_bh(&dp_ctx->dp_link_del_lock);
-	if (wlan_dp_link_check_cdp_vdev(dp_link, cdp_vdev))
-		TAILQ_REMOVE(&dp_link->cdp_vdev_list, cdp_vdev,
-			     cdp_vdev_list_elem);
-	else
-		qdf_assert_always(0);
 
-	if (TAILQ_EMPTY(&dp_link->cdp_vdev_list) && dp_link->destroyed) {
+	if (dp_link->destroyed) {
 		/*
 		 * dp_link has been destroyed as a part of vdev_obj_destroy
 		 * notification and will be present in inactive list
@@ -2071,19 +2096,23 @@ void wlan_dp_link_cdp_vdev_delete_notification(ol_osif_vdev_handle context,
 		if (found)
 			TAILQ_REMOVE(&dp_ctx->inactive_dp_link_list, dp_link,
 				     inactive_list_elem);
-		else {
-			dp_info("dp_link %pK release skipped", dp_link);
-			goto exit;
-		}
+		else
+			qdf_assert_always(0);
 
 		dp_info("Free dp_link %pK id %d (" QDF_MAC_ADDR_FMT ")",
 			dp_link, dp_link->link_id,
 			QDF_MAC_ADDR_REF(dp_link->mac_addr.bytes));
 		dp_link->magic = 0;
 		qdf_mem_free(dp_link);
+	} else {
+		/* dp_link not yet destroyed */
+		dp_info("CDP vdev delete for dp_link %pK id %d ("
+			QDF_MAC_ADDR_FMT ")",
+			dp_link, dp_link->link_id,
+			QDF_MAC_ADDR_REF(dp_link->mac_addr.bytes));
+		dp_link->cdp_vdev_deleted = 1;
 	}
 
-exit:
 	qdf_spin_unlock_bh(&dp_ctx->dp_link_del_lock);
 }
 
@@ -2227,13 +2256,8 @@ err_soc_detach:
 
 void wlan_dp_txrx_soc_detach(ol_txrx_soc_handle soc)
 {
-	struct wlan_dp_psoc_context *dp_ctx = dp_get_context();
-
 	cdp_soc_deinit(soc);
 	cdp_soc_detach(soc);
-
-	if (dp_ctx)
-		dp_ctx->cdp_soc = NULL;
 }
 
 QDF_STATUS wlan_dp_txrx_attach_target(ol_txrx_soc_handle soc, uint8_t pdev_id)

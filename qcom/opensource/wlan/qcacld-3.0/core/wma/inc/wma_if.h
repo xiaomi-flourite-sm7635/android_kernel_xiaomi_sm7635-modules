@@ -220,6 +220,7 @@ struct peer_ml_info {
  * @msd_caps_present: is MSD capability present in MLO IE or not
  * @link_id: per link id
  * @emlsr_trans_timeout: EMLSR transition timeout value
+ * @max_num_simultaneous_links: MLO max simultaneous link num, 1 is MLSR
  *
  * This structure contains parameter required for
  * add sta request of upper layer.
@@ -316,6 +317,7 @@ typedef struct {
 	uint16_t emlsr_trans_timeout;
 	struct ml_partner_link_info ml_partner_info[MLD_MAX_LINKS - 1];
 	struct peer_ml_info ml_info;
+	uint8_t max_num_simultaneous_links;
 #endif
 } tAddStaParams, *tpAddStaParams;
 

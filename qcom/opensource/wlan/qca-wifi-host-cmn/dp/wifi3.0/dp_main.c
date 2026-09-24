@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,6 +17,10 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
+#ifdef WLAN_FEATURE_OSRTP
+#include "mixdp.h"
+#include "xdp_sock_drv.h"
+#endif
 #include <wlan_ipa_obj_mgmt_api.h>
 #include <qdf_types.h>
 #include <qdf_lock.h>
@@ -4900,6 +4904,10 @@ static inline void dp_vdev_fetch_tx_handler(struct dp_vdev *vdev,
 		ctx->tx_exception = dp_tx_send_exception_vdev_id_check;
 	else
 		ctx->tx_exception = dp_tx_send_exception;
+
+#ifdef WLAN_FEATURE_OSRTP
+	ctx->tx_osrtp = dp_tx_send_osrtp;
+#endif
 }
 
 /**
@@ -4919,6 +4927,9 @@ static inline void dp_vdev_register_tx_handler(struct dp_vdev *vdev,
 	txrx_ops->tx.tx = ctx.tx;
 	txrx_ops->tx.tx_fast = ctx.tx_fast;
 	txrx_ops->tx.tx_exception = ctx.tx_exception;
+#ifdef WLAN_FEATURE_OSRTP
+	txrx_ops->tx.tx_osrtp = ctx.tx_osrtp;
+#endif
 
 	dp_info("Configure tx_vdev_id_chk_handler Feature Flag: %d and mode:%d for vdev_id:%d",
 		wlan_cfg_is_tx_per_pkt_vdev_id_check_enabled(soc->wlan_cfg_ctx),
@@ -4947,17 +4958,17 @@ static inline void dp_vdev_fetch_tx_handler(struct dp_vdev *vdev,
  *
  * Return: DP VDEV handle on success, NULL on failure
  */
-static struct cdp_vdev *
-dp_vdev_register_wifi3(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
-		       ol_osif_vdev_handle osif_vdev,
-		       struct ol_txrx_ops *txrx_ops)
+static QDF_STATUS dp_vdev_register_wifi3(struct cdp_soc_t *soc_hdl,
+					 uint8_t vdev_id,
+					 ol_osif_vdev_handle osif_vdev,
+					 struct ol_txrx_ops *txrx_ops)
 {
 	struct dp_soc *soc = cdp_soc_t_to_dp_soc(soc_hdl);
 	struct dp_vdev *vdev =	dp_vdev_get_ref_by_id(soc, vdev_id,
 						      DP_MOD_ID_CDP);
 
 	if (!vdev)
-		return NULL;
+		return QDF_STATUS_E_FAILURE;
 
 	vdev->osif_vdev = osif_vdev;
 	vdev->osif_rx = txrx_ops->rx.rx;
@@ -4967,6 +4978,9 @@ dp_vdev_register_wifi3(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 	vdev->osif_rsim_rx_decap = txrx_ops->rx.rsim_rx_decap;
 	vdev->osif_fisa_rx = txrx_ops->rx.osif_fisa_rx;
 	vdev->osif_fisa_flush = txrx_ops->rx.osif_fisa_flush;
+#ifdef WLAN_FEATURE_OSRTP
+	vdev->osif_rx_osrtp = txrx_ops->rx.rx_osrtp;
+#endif
 	vdev->osif_get_key = txrx_ops->get_key;
 	dp_monitor_vdev_register_osif(vdev, txrx_ops);
 	vdev->osif_tx_free_ext = txrx_ops->tx.tx_free_ext;
@@ -4993,8 +5007,7 @@ dp_vdev_register_wifi3(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 	dp_init_info("%pK: DP Vdev Register success", soc);
 
 	dp_vdev_unref_delete(soc, vdev, DP_MOD_ID_CDP);
-
-	return (struct cdp_vdev *)vdev;
+	return QDF_STATUS_SUCCESS;
 }
 
 #ifdef WLAN_FEATURE_11BE_MLO
@@ -5334,30 +5347,6 @@ static QDF_STATUS dp_vdev_detach_wifi3(struct cdp_soc_t *cdp_soc,
 	return QDF_STATUS_SUCCESS;
 }
 
-#if defined(WLAN_MAX_PDEVS) && (WLAN_MAX_PDEVS == 1)
-/**
- * is_dp_no_unmap_peer_reuse_allow() - check if peer has not received HTT
- *                                     unmap before, not allow to reuse
- * @peer: DP peer handle to be checked
- *
- * Return: true - allowed, false - not
- */
-static inline
-bool is_dp_no_unmap_peer_reuse_allow(struct dp_peer *peer)
-{
-	if (peer->peer_id == HTT_INVALID_PEER)
-		return true;
-	else
-		return false;
-}
-#else
-static inline
-bool is_dp_no_unmap_peer_reuse_allow(struct dp_peer *peer)
-{
-	return true;
-}
-#endif
-
 #ifdef WLAN_FEATURE_11BE_MLO
 /**
  * is_dp_peer_can_reuse() - check if the dp_peer match condition to be reused
@@ -5376,7 +5365,6 @@ bool is_dp_peer_can_reuse(struct dp_vdev *vdev,
 {
 	if (peer->bss_peer && (peer->vdev == vdev) &&
 	    (peer->peer_type == peer_type) &&
-	    is_dp_no_unmap_peer_reuse_allow(peer) &&
 	    (qdf_mem_cmp(peer_mac_addr, peer->mac_addr.raw,
 			 QDF_MAC_ADDR_SIZE) == 0))
 		return true;
@@ -5391,7 +5379,6 @@ bool is_dp_peer_can_reuse(struct dp_vdev *vdev,
 			  enum cdp_peer_type peer_type)
 {
 	if (peer->bss_peer && (peer->vdev == vdev) &&
-	    is_dp_no_unmap_peer_reuse_allow(peer) &&
 	    (qdf_mem_cmp(peer_mac_addr, peer->mac_addr.raw,
 			 QDF_MAC_ADDR_SIZE) == 0))
 		return true;
@@ -6367,7 +6354,7 @@ void dp_vdev_unref_delete(struct dp_soc *soc, struct dp_vdev *vdev,
 {
 	ol_txrx_vdev_delete_cb vdev_delete_cb = NULL;
 	void *vdev_delete_context = NULL;
-	ol_txrx_vdev_del_notify_cb vdev_del_notify = NULL;
+	ol_txrx_vdev_delete_cb vdev_del_notify = NULL;
 	void *vdev_del_noitfy_ctx = NULL;
 	uint8_t vdev_id = vdev->vdev_id;
 	struct dp_pdev *pdev = vdev->pdev;
@@ -6430,15 +6417,14 @@ free_vdev:
 				     vdev);
 	wlan_minidump_remove(vdev, sizeof(*vdev), soc->ctrl_psoc,
 			     WLAN_MD_DP_VDEV, "dp_vdev");
-
-	if (vdev_del_notify)
-		vdev_del_notify(vdev_del_noitfy_ctx, (struct cdp_vdev *)vdev);
-
 	qdf_mem_free(vdev);
 	vdev = NULL;
 
 	if (vdev_delete_cb)
 		vdev_delete_cb(vdev_delete_context);
+
+	if (vdev_del_notify)
+		vdev_del_notify(vdev_del_noitfy_ctx);
 }
 
 qdf_export_symbol(dp_vdev_unref_delete);
@@ -10340,10 +10326,6 @@ static QDF_STATUS dp_txrx_dump_stats(struct cdp_soc_t *psoc, uint16_t value,
 		dp_pdev_print_tx_delay_stats(soc);
 		break;
 
-	case CDP_TXRX_SOC_STATS:
-		dp_print_txrx_soc_stats(soc);
-		break;
-
 	default:
 		status = QDF_STATUS_E_INVAL;
 		break;
@@ -12157,6 +12139,62 @@ dp_set_pkt_capture_mode(struct cdp_soc_t *soc_handle, bool val)
 }
 #endif
 
+#ifdef WLAN_FEATURE_OSRTP
+static int dp_set_osrtp_prog(struct cdp_soc_t *soc_handle, struct bpf_prog *prog)
+{
+	struct dp_soc *soc = (struct dp_soc *)soc_handle;
+	struct bpf_prog *old_prog = rcu_dereference(soc->osrtp_info.prog);
+
+	rcu_assign_pointer(soc->osrtp_info.prog, prog);
+
+	if (old_prog) {
+		bpf_prog_put(old_prog);
+	}
+
+	return 0;
+}
+
+static int dp_set_osrtp_xsk_pool(struct cdp_soc_t *soc_handle, struct net_device *netdev, struct xsk_buff_pool *new_pool, uint16_t qid)
+{
+	int err = 0;
+	struct dp_soc *soc = (struct dp_soc *)soc_handle;
+
+	if (new_pool) {
+		err = mi_xsk_pool_dma_map(new_pool, soc->osdev->dev, DMA_ATTR_SKIP_CPU_SYNC);
+		if (err) {
+			goto out;
+		}
+
+		mi_xdp_rxq_info_reg(&soc->osrtp_info.xdp_rxq, netdev, qid, 0);
+		mi_xdp_rxq_info_reg_mem_model(&soc->osrtp_info.xdp_rxq, MEM_TYPE_XSK_BUFF_POOL, NULL);
+		mi_xsk_pool_set_rxq_info(new_pool, &soc->osrtp_info.xdp_rxq);
+
+		rcu_assign_pointer(soc->osrtp_info.xsk_pool, new_pool);
+	} else {
+		mi_xdp_rxq_info_unreg(&soc->osrtp_info.xdp_rxq);
+		rcu_assign_pointer(soc->osrtp_info.xsk_pool, NULL);
+	}
+
+	soc->osrtp_info.qid = qid;
+
+out:
+	return err;
+}
+
+static struct xsk_buff_pool *dp_get_osrtp_xsk_pool(struct cdp_soc_t *soc_handle)
+{
+	struct xsk_buff_pool *pool = NULL;
+	struct dp_soc *soc = (struct dp_soc *)soc_handle;
+
+	pool = rcu_dereference(soc->osrtp_info.xsk_pool);
+	if (pool)
+		mi_xp_get_pool(pool);
+
+	return pool;
+}
+#endif
+
+
 #ifdef HW_TX_DELAY_STATS_ENABLE
 /**
  * dp_enable_disable_vdev_tx_delay_stats() - Start/Stop tx delay stats capture
@@ -12496,6 +12534,11 @@ static struct cdp_cmn_ops dp_ops_cmn = {
 	.txrx_get_tsf_time = dp_get_tsf_time,
 	.txrx_get_tsf2_offset = dp_get_tsf2_scratch_reg,
 	.txrx_get_tqm_offset = dp_get_tqm_scratch_reg,
+#ifdef WLAN_FEATURE_OSRTP
+	.set_osrtp_prog = dp_set_osrtp_prog,
+	.set_osrtp_xsk_pool = dp_set_osrtp_xsk_pool,
+	.get_osrtp_xsk_pool = dp_get_osrtp_xsk_pool,
+#endif
 #ifdef WLAN_SUPPORT_RX_FISA
 	.get_fst_cmem_base = dp_rx_fisa_get_cmem_base,
 #endif

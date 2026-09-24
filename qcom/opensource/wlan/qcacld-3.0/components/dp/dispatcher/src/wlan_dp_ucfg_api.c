@@ -43,6 +43,9 @@
 #ifdef WLAN_FEATURE_11BE_MLO
 #include "wlan_mlo_mgr_public_api.h"
 #endif
+#ifdef WLAN_FEATURE_OSRTP
+#include "xsk_buff_pool.h"
+#endif
 #include "cdp_txrx_ctrl.h"
 
 #ifdef FEATURE_DIRECT_LINK
@@ -1165,26 +1168,12 @@ static QDF_STATUS wlan_dp_get_tsf_time(void *dp_link_ctx,
 }
 #endif
 
-static inline void wlan_dp_add_cdp_vdev(struct wlan_dp_link *dp_link,
-					struct cdp_vdev *cdp_vdev)
-{
-	struct wlan_dp_intf *dp_intf = dp_link->dp_intf;
-	struct wlan_dp_psoc_context *dp_ctx = dp_intf->dp_ctx;
-
-	qdf_spin_lock_bh(&dp_ctx->dp_link_del_lock);
-	if (!wlan_dp_link_check_cdp_vdev(dp_link, cdp_vdev))
-		TAILQ_INSERT_TAIL(&dp_link->cdp_vdev_list, cdp_vdev,
-				  cdp_vdev_list_elem);
-	qdf_spin_unlock_bh(&dp_ctx->dp_link_del_lock);
-}
-
 QDF_STATUS ucfg_dp_sta_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 {
 	struct ol_txrx_ops txrx_ops;
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct wlan_dp_intf *dp_intf;
 	struct wlan_dp_link *dp_link;
-	struct cdp_vdev *cdp_vdev = NULL;
 
 	dp_link = dp_get_vdev_priv_obj(vdev);
 	if (unlikely(!dp_link)) {
@@ -1206,6 +1195,10 @@ QDF_STATUS ucfg_dp_sta_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 		txrx_ops.rx.rx_stack = NULL;
 		txrx_ops.rx.rx_flush = NULL;
 	}
+
+#ifdef WLAN_FEATURE_OSRTP
+	txrx_ops.rx.rx_osrtp = dp_rx_osrtp_cbk;
+#endif
 
 	if (wlan_dp_cfg_is_rx_fisa_enabled(&dp_intf->dp_ctx->dp_cfg) &&
 	    dp_intf->device_mode != QDF_MONITOR_MODE) {
@@ -1219,14 +1212,17 @@ QDF_STATUS ucfg_dp_sta_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	txrx_ops.tx.tx = NULL;
 	txrx_ops.get_tsf_time = wlan_dp_get_tsf_time;
 	txrx_ops.vdev_del_notify = wlan_dp_link_cdp_vdev_delete_notification;
-	cdp_vdev = cdp_vdev_register(soc, dp_link->link_id,
-				     (ol_osif_vdev_handle)dp_link, &txrx_ops);
+	cdp_vdev_register(soc, dp_link->link_id, (ol_osif_vdev_handle)dp_link,
+			  &txrx_ops);
 	if (!txrx_ops.tx.tx) {
 		dp_err("vdev register fail");
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	wlan_dp_add_cdp_vdev(dp_link, cdp_vdev);
+	dp_link->cdp_vdev_registered = 1;
+	dp_link->cdp_vdev_deleted = 0;
+	dp_link->destroyed = 0;
+
 	dp_intf->txrx_ops = txrx_ops;
 
 	return QDF_STATUS_SUCCESS;
@@ -1239,7 +1235,6 @@ QDF_STATUS ucfg_dp_tdlsta_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct wlan_dp_intf *dp_intf;
 	struct wlan_dp_link *dp_link;
-	struct cdp_vdev *cdp_vdev = NULL;
 
 	dp_link = dp_get_vdev_priv_obj(vdev);
 	if (unlikely(!dp_link)) {
@@ -1273,14 +1268,17 @@ QDF_STATUS ucfg_dp_tdlsta_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	txrx_ops.tx.tx = NULL;
 
 	txrx_ops.vdev_del_notify = wlan_dp_link_cdp_vdev_delete_notification;
-	cdp_vdev = cdp_vdev_register(soc, dp_link->link_id,
-				     (ol_osif_vdev_handle)dp_link, &txrx_ops);
+	cdp_vdev_register(soc, dp_link->link_id, (ol_osif_vdev_handle)dp_link,
+			  &txrx_ops);
+
 	if (!txrx_ops.tx.tx) {
 		dp_err("vdev register fail");
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	wlan_dp_add_cdp_vdev(dp_link, cdp_vdev);
+	dp_link->cdp_vdev_registered = 1;
+	dp_link->cdp_vdev_deleted = 0;
+	dp_link->destroyed = 0;
 	dp_intf->txrx_ops = txrx_ops;
 
 	return QDF_STATUS_SUCCESS;
@@ -1293,7 +1291,6 @@ QDF_STATUS ucfg_dp_ocb_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct wlan_dp_intf *dp_intf;
 	struct wlan_dp_link *dp_link;
-	struct cdp_vdev *cdp_vdev = NULL;
 
 	dp_link = dp_get_vdev_priv_obj(vdev);
 	if (unlikely(!dp_link)) {
@@ -1308,14 +1305,16 @@ QDF_STATUS ucfg_dp_ocb_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	txrx_ops.rx.stats_rx = dp_tx_rx_collect_connectivity_stats_info;
 	txrx_ops.vdev_del_notify = wlan_dp_link_cdp_vdev_delete_notification;
 
-	cdp_vdev = cdp_vdev_register(soc, dp_link->link_id,
-				     (ol_osif_vdev_handle)dp_link, &txrx_ops);
+	cdp_vdev_register(soc, dp_link->link_id, (ol_osif_vdev_handle)dp_link,
+			  &txrx_ops);
 	if (!txrx_ops.tx.tx) {
 		dp_err("vdev register fail");
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	wlan_dp_add_cdp_vdev(dp_link, cdp_vdev);
+	dp_link->cdp_vdev_registered = 1;
+	dp_link->cdp_vdev_deleted = 0;
+	dp_link->destroyed = 0;
 	dp_intf->txrx_ops = txrx_ops;
 
 	qdf_copy_macaddr(&dp_link->conn_info.peer_macaddr,
@@ -1331,7 +1330,6 @@ QDF_STATUS ucfg_dp_mon_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct wlan_dp_intf *dp_intf;
 	struct wlan_dp_link *dp_link;
-	struct cdp_vdev *cdp_vdev = NULL;
 
 	dp_link = dp_get_vdev_priv_obj(vdev);
 	if (unlikely(!dp_link)) {
@@ -1344,10 +1342,13 @@ QDF_STATUS ucfg_dp_mon_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 	txrx_ops.rx.rx = dp_mon_rx_packet_cbk;
 	dp_monitor_set_rx_monitor_cb(&txrx_ops, dp_rx_monitor_callback);
 	txrx_ops.vdev_del_notify = wlan_dp_link_cdp_vdev_delete_notification;
-	cdp_vdev = cdp_vdev_register(soc, dp_link->link_id,
-				     (ol_osif_vdev_handle)dp_link, &txrx_ops);
+	cdp_vdev_register(soc, dp_link->link_id,
+			  (ol_osif_vdev_handle)dp_link,
+			  &txrx_ops);
 
-	wlan_dp_add_cdp_vdev(dp_link, cdp_vdev);
+	dp_link->cdp_vdev_registered = 1;
+	dp_link->cdp_vdev_deleted = 0;
+	dp_link->destroyed = 0;
 	dp_intf->txrx_ops = txrx_ops;
 
 	return QDF_STATUS_SUCCESS;
@@ -1360,7 +1361,6 @@ QDF_STATUS ucfg_dp_softap_register_txrx_ops(struct wlan_objmgr_vdev *vdev,
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	struct wlan_dp_intf *dp_intf;
 	struct wlan_dp_link *dp_link;
-	struct cdp_vdev *cdp_vdev = NULL;
 
 	dp_link = dp_get_vdev_priv_obj(vdev);
 	if (unlikely(!dp_link)) {
@@ -1384,16 +1384,24 @@ QDF_STATUS ucfg_dp_softap_register_txrx_ops(struct wlan_objmgr_vdev *vdev,
 		txrx_ops->rx.rx_flush = NULL;
 	}
 
+#ifdef WLAN_FEATURE_OSRTP
+	txrx_ops->rx.rx_osrtp = dp_rx_osrtp_cbk;
+#endif
+
 	txrx_ops->get_tsf_time = wlan_dp_get_tsf_time;
 	txrx_ops->vdev_del_notify = wlan_dp_link_cdp_vdev_delete_notification;
-	cdp_vdev = cdp_vdev_register(soc, dp_link->link_id,
-				     (ol_osif_vdev_handle)dp_link, txrx_ops);
+	cdp_vdev_register(soc,
+			  dp_link->link_id,
+			  (ol_osif_vdev_handle)dp_link,
+			  txrx_ops);
 	if (!txrx_ops->tx.tx) {
 		dp_err("vdev register fail");
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	wlan_dp_add_cdp_vdev(dp_link, cdp_vdev);
+	dp_link->cdp_vdev_registered = 1;
+	dp_link->cdp_vdev_deleted = 0;
+	dp_link->destroyed = 0;
 	dp_intf->txrx_ops = *txrx_ops;
 	dp_intf->sap_tx_block_mask &= ~DP_TX_FN_CLR;
 
@@ -1612,6 +1620,32 @@ ucfg_dp_is_disconect_after_roam_fail(struct wlan_objmgr_psoc *psoc)
 
 	if (dp_cfg->enable_nud_tracking == DP_DISCONNECT_AFTER_ROAM_FAIL)
 		return true;
+
+	return false;
+}
+
+bool
+ucfg_dp_is_nud_failure_event_notify(struct wlan_objmgr_psoc *psoc)
+{
+	struct wlan_dp_psoc_context *dp_ctx;
+	struct wlan_dp_psoc_cfg *dp_cfg;
+
+	dp_ctx = dp_psoc_get_priv(psoc);
+	if (!dp_ctx) {
+		dp_err("Unable to get DP context");
+		return false;
+	}
+
+	dp_cfg = &dp_ctx->dp_cfg;
+	if (!dp_cfg) {
+		dp_err("Unable to get DP config");
+		return false;
+	}
+
+	if (dp_cfg->enable_nud_failure_event_notify ==
+			DP_NOFITY_EVENT_AFTER_ROAM_FAIL) {
+		return true;
+	}
 
 	return false;
 }
@@ -2301,7 +2335,10 @@ void ucfg_dp_register_hdd_callbacks(struct wlan_objmgr_psoc *psoc,
 	dp_ctx->dp_ops.osif_dp_process_mic_error =
 		cb_obj->osif_dp_process_mic_error;
 	dp_ctx->dp_ops.link_monitoring_cb = cb_obj->link_monitoring_cb;
-	}
+#ifdef WLAN_FEATURE_OSRTP
+	dp_ctx->dp_ops.dp_rx_osrtp_pkt = cb_obj->dp_rx_osrtp_pkt;
+#endif
+}
 
 void ucfg_dp_register_event_handler(struct wlan_objmgr_psoc *psoc,
 				    struct wlan_dp_psoc_nb_ops *cb_obj)
@@ -2878,6 +2915,60 @@ QDF_STATUS ucfg_dp_get_vdev_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
 	return cdp_host_get_vdev_stats(soc, vdev_id, buf, true);
 }
 
+#ifdef WLAN_FEATURE_OSRTP
+QDF_STATUS ucfg_dp_start_xmit_osrtp(struct xsk_buff_pool *pool, struct wlan_objmgr_vdev *vdev,
+            struct cdp_tx_osrtp_desc *osrtp_desc)
+{
+	struct wlan_dp_intf *dp_intf = NULL;
+	struct wlan_dp_link *dp_link = NULL;
+	struct wlan_dp_link *tx_dp_link = NULL;
+
+	dp_link = dp_get_vdev_priv_obj(vdev);
+	if (unlikely(!dp_link)) {
+		dp_err_rl("DP link not found");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	dp_intf = dp_link->dp_intf;
+
+	/*
+	 * UMAC may queue TX on any vdev of the interface, but it may not be
+	 * in sync with the def_link for DP, hence ignore the vdev from
+	 * UMAC and select the tx_dp_link in DP.
+	 *
+	 * Since one link is already present in the dp_intf and validated above,
+	 * the def_link is not expected to be NULL. Hence there is no need
+	 * to validate tx_dp_link again.
+	 */
+	tx_dp_link = dp_intf->def_link;
+	qdf_atomic_inc(&dp_intf->num_active_task);
+	dp_start_xmit_osrtp(tx_dp_link, osrtp_desc, pool);
+	qdf_atomic_dec(&dp_intf->num_active_task);
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS ucfg_dp_softap_start_xmit_osrtp(struct xsk_buff_pool *pool, struct wlan_objmgr_vdev *vdev,
+            struct cdp_tx_osrtp_desc *osrtp_desc)
+{
+	struct wlan_dp_intf *dp_intf = NULL;
+	struct wlan_dp_link *dp_link = NULL;
+
+	dp_link = dp_get_vdev_priv_obj(vdev);
+	if (unlikely(!dp_link)) {
+		dp_err_rl("DP link not found");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	dp_intf = dp_link->dp_intf;
+	qdf_atomic_inc(&dp_intf->num_active_task);
+	dp_softap_start_xmit_osrtp(dp_link, osrtp_desc, pool);
+	qdf_atomic_dec(&dp_intf->num_active_task);
+
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 void ucfg_dp_set_mon_conf_flags(struct wlan_objmgr_psoc *psoc, uint32_t flags)
 {
 	cdp_config_param_type val;
@@ -2894,4 +2985,31 @@ void ucfg_dp_set_mon_conf_flags(struct wlan_objmgr_psoc *psoc, uint32_t flags)
 					 CDP_MONITOR_FLAG, val);
 	if (QDF_IS_STATUS_ERROR(status))
 		dp_err("Failed to set flag %d status %d", flags, status);
+}
+
+#define DP_NOTIFY_BMISS_EVENT_TO_FWK_ENABLED 1
+bool ucfg_dp_bmiss_event_notify(struct wlan_objmgr_psoc *psoc)
+{
+	struct wlan_dp_psoc_context *dp_ctx;
+	struct wlan_dp_psoc_cfg *dp_cfg;
+
+	dp_ctx = dp_psoc_get_priv(psoc);
+	if (!dp_ctx)
+	{
+		dp_err("DP context is NULL");
+		return false;
+	}
+
+	dp_cfg = &dp_ctx->dp_cfg;
+	if (!dp_cfg)
+	{
+		dp_err("DP config is NULL");
+		return false;
+	}
+
+	if (dp_cfg->enable_bmiss_event_notify ==
+			DP_NOTIFY_BMISS_EVENT_TO_FWK_ENABLED)
+		return true;
+
+	return false;
 }

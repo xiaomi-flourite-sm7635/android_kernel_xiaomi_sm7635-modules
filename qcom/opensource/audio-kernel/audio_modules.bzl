@@ -230,12 +230,6 @@ audio_modules.register(
     },
 )
 audio_modules.register(
-    name = "sdca_registers_dlkm",
-    path = ASOC_CODECS_PATH,
-    config_option = "CONFIG_SND_SOC_SDCA_REGISTERS",
-    srcs = ["sdca-registers-api.c"]
-)
-audio_modules.register(
     name = "swr_dmic_dlkm",
     path = ASOC_CODECS_PATH,
     config_option = "CONFIG_SND_SOC_SWR_DMIC",
@@ -282,12 +276,6 @@ audio_modules.register(
     config_option = "CONFIG_SND_SOC_MSM_HDMI_CODEC_RX",
     srcs = ["msm_hdmi_codec_rx.c"],
     deps = ["//vendor/qcom/opensource/mm-drivers/msm_ext_display:%b_msm_ext_display"]
-)
-audio_modules.register(
-    name = "lpass_bt_swr_dlkm",
-    path = ASOC_CODECS_PATH,
-    config_option = "CONFIG_LPASS_BT_SWR",
-    srcs = ["lpass-bt-swr.c"]
 )
 # >>>> ASOC/CODECS/LPASS-CDC MODULES <<<<
 audio_modules.register(
@@ -404,24 +392,6 @@ audio_modules.register(
         "wsa884x-tables.c",
     ]
 )
-
-# >>>> AW882xx MODULE <<<<
-audio_modules.register(
-    name = "aw882xx_dlkm",
-    path = ASOC_CODECS_PATH + "/aw882xx",
-    config_option = "CONFIG_SND_SOC_AW882XX",
-    srcs = [
-        "aw882xx_bin_parse.c",
-        "aw882xx.c",
-        "aw882xx_calib.c",
-        "aw882xx_device.c",
-        "aw882xx_dsp.c",
-        "aw882xx_init.c",
-        "aw882xx_monitor.c",
-        "aw882xx_spin.c",
-    ],
-)
-
 # >>>> WCD937X MODULES <<<<
 audio_modules.register(
     name = "wcd937x_dlkm",

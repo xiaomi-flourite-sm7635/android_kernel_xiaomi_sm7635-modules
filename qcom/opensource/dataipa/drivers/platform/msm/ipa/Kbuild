@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 ccflags-y += \
-	-I$(srctree)/$(src)/../../../../../datarmnet-ext/mem
+	-I$(src)/../../../../../datarmnet-ext/mem
 
 ipam-y += \
 	ipa_rm.o ipa_rm_dependency_graph.o ipa_rm_peers_list.o ipa_rm_resource.o ipa_rm_inactivity_timer.o \
@@ -90,4 +90,3 @@ obj-$(CONFIG_IPA3) += ipanetm.o
 obj-$(CONFIG_IPA_KERNEL_TESTS_MODULE) += ipatestm.o
 
 obj-y += ipa_v3/ ipa_clients/
-

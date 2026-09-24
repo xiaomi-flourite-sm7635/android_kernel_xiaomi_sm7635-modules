@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -746,7 +746,9 @@ static int dp_ctrl_link_setup(struct dp_ctrl_private *ctrl, bool shallow)
 	u32 link_train_max_retries = 100;
 	struct dp_catalog_ctrl *catalog;
 	struct dp_link_params *link_params;
-
+#ifdef MI_DISPLAY_MODIFY
+	int retry = 3;
+#endif
 	catalog = ctrl->catalog;
 	link_params = &ctrl->link->link_params;
 
@@ -780,7 +782,10 @@ static int dp_ctrl_link_setup(struct dp_ctrl_private *ctrl, bool shallow)
 		rc = dp_ctrl_setup_main_link(ctrl);
 		if (!rc)
 			break;
-
+#ifdef MI_DISPLAY_MODIFY
+		if ((rc == -EINVAL || rc == -ETIMEDOUT || rc == -EIO) && (retry-- < 0))
+			break;
+#endif
 		/*
 		 * Shallow means link training failure is not important.
 		 * If it fails, we still keep the link clocks on.
@@ -1314,13 +1319,7 @@ static int dp_ctrl_stream_on(struct dp_ctrl *dp_ctrl, struct dp_panel *panel)
 	/* wait for link training completion before fec config as per spec */
 	dp_ctrl_fec_setup(ctrl);
 	dp_ctrl_dsc_setup(ctrl, panel);
-
-	/*
-	 * Enabling TEST SINK CRC is causing blank screen on some monitors. This change is
-	 * required only for internal testing, hence disabling for commercial use. To be enabled
-	 * by dev team as required.
-	 * panel->sink_crc_enable(panel, true);
-	 */
+	panel->sink_crc_enable(panel, true);
 
 	return rc;
 }

@@ -26,6 +26,7 @@
 #include "cam_ois_dev.h"
 #include "cam_tpg_dev.h"
 #include "cam_flash_dev.h"
+#include "cam_aperture_dev.h"
 
 #include "cam_icp_v1_dev.h"
 #include "cam_icp_v2_dev.h"
@@ -60,6 +61,17 @@
 #include "cam_tfe_csid.h"
 #include "cam_csid_ppi100.h"
 #include "camera_main.h"
+
+#if IS_ENABLED(CONFIG_MIISP)
+#include "cam_ispv4_dev.h"
+#endif
+
+#ifndef CAMERA_COMPILE_BY
+#include "cam_generated_h"
+#endif
+
+char camera_banner[] = "Camera-Banner: (" CAMERA_COMPILE_BY "@"
+	CAMERA_COMPILE_HOST ") (" CAMERA_COMPILE_TIME ")";
 
 #ifdef CONFIG_CAM_PRESIL
 extern int cam_presil_framework_dev_init_from_main(void);
@@ -114,7 +126,11 @@ static const struct camera_submodule_component camera_sensor[] = {
 	{&cam_sensor_driver_init, &cam_sensor_driver_exit},
 	{&cam_eeprom_driver_init, &cam_eeprom_driver_exit},
 	{&cam_ois_driver_init, &cam_ois_driver_exit},
+	{&cam_aperture_driver_init, &cam_aperture_driver_exit},
 	{&cam_flash_init_module, &cam_flash_exit_module},
+#if IS_ENABLED(CONFIG_MIISP)
+	{&cam_ispv4_driver_init, &cam_ispv4_driver_exit},
+#endif
 #endif
 };
 
@@ -287,6 +303,7 @@ static int camera_init(void)
 	int rc;
 	uint i, j, num_inits;
 
+	CAM_INFO(CAM_UTIL, "%s", camera_banner);
 	rc = camera_verify_submodules();
 	if (rc)
 		goto end_init;

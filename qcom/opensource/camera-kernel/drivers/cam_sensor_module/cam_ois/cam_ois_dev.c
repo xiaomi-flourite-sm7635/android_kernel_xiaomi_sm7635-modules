@@ -11,9 +11,10 @@
 #include "cam_debug_util.h"
 #include "camera_main.h"
 #include "cam_compat.h"
-#ifdef CONFIG_OIS_DW9784
-extern int ois_creat_sysfs(struct cam_ois_ctrl_t *o_ctrl);
-#endif 
+/* xiaomi add for cci debug start */
+#include "cam_cci_debug_util.h"
+/* xiaomi add for cci debug end */
+
 static struct cam_i3c_ois_data {
 	struct cam_ois_ctrl_t                       *o_ctrl;
 	struct completion                            probe_complete;
@@ -190,7 +191,7 @@ static int cam_ois_init_subdev_param(struct cam_ois_ctrl_t *o_ctrl)
 static int cam_ois_i2c_component_bind(struct device *dev,
 	struct device *master_dev, void *data)
 {
-	int                          rc = 0;
+	int                          rc = 0, i = 0; // xiaomi add
 	struct i2c_client           *client = NULL;
 	struct cam_ois_ctrl_t       *o_ctrl = NULL;
 	struct cam_ois_soc_private  *soc_private = NULL;
@@ -216,6 +217,47 @@ static int cam_ois_i2c_component_bind(struct device *dev,
 	o_ctrl->ois_device_type = MSM_CAMERA_I2C_DEVICE;
 	o_ctrl->io_master_info.master_type = I2C_MASTER;
 	o_ctrl->io_master_info.client = client;
+
+	// xiaomi add begin
+	INIT_LIST_HEAD(&(o_ctrl->i2c_parklens_data.list_head));
+	parklens_atomic_set(&(o_ctrl->parklens_ctrl.parklens_opcode),
+		ENTER_PARKLENS_WITH_POWERDOWN);
+	parklens_atomic_set(&(o_ctrl->parklens_ctrl.exit_result),
+		PARKLENS_ENTER);
+	parklens_atomic_set(&(o_ctrl->parklens_ctrl.parklens_state),
+		PARKLENS_INVALID);
+	o_ctrl->parklens_ctrl.parklens_thread = NULL;
+	o_ctrl->i2c_data.per_frame =
+		kzalloc(sizeof(struct i2c_settings_array) *
+		MAX_PER_FRAME_ARRAY, GFP_KERNEL);
+
+	INIT_LIST_HEAD(&(o_ctrl->i2c_data.init_settings.list_head));
+
+	if (NULL == o_ctrl->i2c_data.per_frame)
+	{
+		rc = -ENOMEM;
+		goto octrl_free;
+	}
+
+	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++)
+		INIT_LIST_HEAD(&(o_ctrl->i2c_data.per_frame[i].list_head));
+
+	o_ctrl->bridge_intf.device_hdl = -1;
+	o_ctrl->bridge_intf.link_hdl = -1;
+	o_ctrl->bridge_intf.ops.get_dev_info =
+		cam_ois_publish_dev_info;
+	o_ctrl->bridge_intf.ops.link_setup =
+		cam_ois_establish_link;
+	o_ctrl->bridge_intf.ops.apply_req =
+		cam_ois_apply_request;
+	o_ctrl->last_flush_req = 0;
+	o_ctrl->fw_store.fw_count = 0;
+	for (i = 0; i < MAX_FW_COUNT; i++) {
+		o_ctrl->fw_store.fw_name[i] = NULL;
+		o_ctrl->fw_store.fw[i] = NULL;
+	}
+	CAM_INFO(CAM_OIS, "Component ois_i2c %s bound successfully", client->name);
+	//xiaomi add end
 
 	soc_private = kzalloc(sizeof(struct cam_ois_soc_private),
 		GFP_KERNEL);
@@ -245,6 +287,13 @@ static int cam_ois_i2c_component_bind(struct device *dev,
 soc_free:
 	kfree(soc_private);
 octrl_free:
+	// xiaomi add begin
+	if (NULL != o_ctrl->i2c_data.per_frame)
+	{
+		kfree(o_ctrl->i2c_data.per_frame);
+		o_ctrl->i2c_data.per_frame = NULL;
+	}
+	// xiaomi add end
 	kfree(o_ctrl);
 probe_failure:
 	return rc;
@@ -287,6 +336,14 @@ static void cam_ois_i2c_component_unbind(struct device *dev,
 	cam_ois_shutdown(o_ctrl);
 	mutex_unlock(&(o_ctrl->ois_mutex));
 	cam_unregister_subdev(&(o_ctrl->v4l2_dev_str));
+
+	// xiaomi add begin
+	if (NULL != o_ctrl->i2c_data.per_frame)
+	{
+		kfree(o_ctrl->i2c_data.per_frame);
+		o_ctrl->i2c_data.per_frame = NULL;
+	}
+	// xiaomi add end
 
 	kfree(o_ctrl->soc_info.soc_private);
 	v4l2_set_subdevdata(&o_ctrl->v4l2_dev_str.sd, NULL);
@@ -378,6 +435,19 @@ static int cam_ois_component_bind(struct device *dev,
 
 	memset(&o_ctrl->fw_info, 0, sizeof(struct cam_cmd_ois_fw_info));
 
+	// xiaomi add begin
+	o_ctrl->i2c_data.per_frame =
+		kzalloc(sizeof(struct i2c_settings_array) *
+		MAX_PER_FRAME_ARRAY, GFP_KERNEL);
+	if (o_ctrl->i2c_data.per_frame == NULL) {
+		rc = -ENOMEM;
+		goto free_soc;
+	}
+
+	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++)
+		INIT_LIST_HEAD(&(o_ctrl->i2c_data.per_frame[i].list_head));
+	// xiaomi add end
+
 	INIT_LIST_HEAD(&(o_ctrl->i2c_init_data.list_head));
 	INIT_LIST_HEAD(&(o_ctrl->i2c_calib_data.list_head));
 	INIT_LIST_HEAD(&(o_ctrl->i2c_fwinit_data.list_head));
@@ -388,6 +458,7 @@ static int cam_ois_component_bind(struct device *dev,
 	INIT_LIST_HEAD(&(o_ctrl->i2c_fw_version_data.list_head));
 	INIT_LIST_HEAD(&(o_ctrl->i2c_mode_data.list_head));
 	INIT_LIST_HEAD(&(o_ctrl->i2c_time_data.list_head));
+	INIT_LIST_HEAD(&(o_ctrl->i2c_postinit_data.list_head)); // xiaomi add
 	mutex_init(&(o_ctrl->ois_mutex));
 	rc = cam_ois_driver_soc_init(o_ctrl);
 	if (rc) {
@@ -405,6 +476,23 @@ static int cam_ois_component_bind(struct device *dev,
 		goto unreg_subdev;
 	}
 	o_ctrl->bridge_intf.device_hdl = -1;
+	// xiaomi add begin
+	o_ctrl->bridge_intf.link_hdl = -1;
+	o_ctrl->bridge_intf.ops.get_dev_info =
+		cam_ois_publish_dev_info;
+	o_ctrl->bridge_intf.ops.link_setup =
+		cam_ois_establish_link;
+	o_ctrl->bridge_intf.ops.apply_req =
+		cam_ois_apply_request;
+	o_ctrl->bridge_intf.ops.flush_req =
+		cam_ois_flush_request;
+	o_ctrl->last_flush_req = 0;
+	o_ctrl->fw_store.fw_count = 0;
+	for (i = 0; i < MAX_FW_COUNT; i++) {
+		o_ctrl->fw_store.fw_name[i] = NULL;
+		o_ctrl->fw_store.fw[i] = NULL;
+	}
+	// xiaomi add end
 
 	cam_sensor_module_add_i2c_device((void *) o_ctrl, CAM_SENSOR_OIS);
 
@@ -414,11 +502,28 @@ static int cam_ois_component_bind(struct device *dev,
 	g_i3c_ois_data[o_ctrl->soc_info.index].o_ctrl = o_ctrl;
 	init_completion(&g_i3c_ois_data[o_ctrl->soc_info.index].probe_complete);
 
-	CAM_DBG(CAM_OIS, "Component bound successfully");
-#ifdef CONFIG_OIS_DW9784
-        CAM_INFO(CAM_OIS, "ois_creat_sysfs");
-        ois_creat_sysfs(o_ctrl);
-#endif
+	INIT_LIST_HEAD(&(o_ctrl->i2c_parklens_data.list_head));
+	parklens_atomic_set(&(o_ctrl->parklens_ctrl.parklens_opcode),
+		ENTER_PARKLENS_WITH_POWERDOWN);
+	parklens_atomic_set(&(o_ctrl->parklens_ctrl.exit_result),
+		PARKLENS_ENTER);
+	parklens_atomic_set(&(o_ctrl->parklens_ctrl.parklens_state),
+		PARKLENS_INVALID);
+	o_ctrl->parklens_ctrl.parklens_thread = NULL;
+
+	CAM_INFO(CAM_OIS, "Component %s bound successfully", pdev->name);
+
+	/* xiaomi add for cci debug start */
+	rc = cam_cci_dev_create_debugfs_entry(o_ctrl->device_name,
+		o_ctrl->soc_info.index, CAM_OIS_NAME,
+		&o_ctrl->io_master_info, o_ctrl->cci_i2c_master,
+		&o_ctrl->cci_debug);
+	if (rc) {
+		CAM_WARN(CAM_OIS, "debugfs creation failed");
+		rc = 0;
+	}
+	/* xiaomi add for cci debug end */
+
 	return rc;
 unreg_subdev:
 	cam_unregister_subdev(&(o_ctrl->v4l2_dev_str));
@@ -427,6 +532,13 @@ free_soc:
 free_cci_client:
 	kfree(o_ctrl->io_master_info.cci_client);
 free_o_ctrl:
+	// xiaomi add begin
+	if (NULL != o_ctrl->i2c_data.per_frame)
+	{
+		kfree(o_ctrl->i2c_data.per_frame);
+		o_ctrl->i2c_data.per_frame = NULL;
+	}
+	// xiaomi add end
 	kfree(o_ctrl);
 	return rc;
 }
@@ -465,6 +577,14 @@ static void cam_ois_component_unbind(struct device *dev,
 	cam_ois_shutdown(o_ctrl);
 	mutex_unlock(&(o_ctrl->ois_mutex));
 	cam_unregister_subdev(&(o_ctrl->v4l2_dev_str));
+	/* xiaomi add for cci debug start */
+	cam_cci_dev_remove_debugfs_entry((void *)o_ctrl->cci_debug);
+	if (NULL != o_ctrl->i2c_data.per_frame)
+	{
+		kfree(o_ctrl->i2c_data.per_frame);
+		o_ctrl->i2c_data.per_frame = NULL;
+	}
+	/* xiaomi add for cci debug end */
 
 	kfree(o_ctrl->soc_info.soc_private);
 	kfree(o_ctrl->io_master_info.cci_client);
@@ -483,8 +603,27 @@ static int32_t cam_ois_platform_driver_probe(
 {
 	int rc = 0;
 
-	CAM_DBG(CAM_OIS, "Adding OIS Sensor component");
-	rc = component_add(&pdev->dev, &cam_ois_component_ops);
+	int hw_device = -1;
+	int customEnable = -1;
+	int customHwid = -1;
+	hw_device = cam_get_hw_device();
+	of_property_read_u32(pdev->dev.of_node, "custom-enable", &customEnable);
+	of_property_read_u32(pdev->dev.of_node, "custom-hwid", &customHwid);
+
+	if (customEnable == 1)
+	{
+		if (hw_device == customHwid)
+		{
+			CAM_DBG(CAM_OIS, "custom:Adding sensor ois component");
+			rc = component_add(&pdev->dev, &cam_ois_component_ops);
+		}
+	}
+	else
+	{
+		CAM_DBG(CAM_OIS, "Adding OIS Sensor component");
+		rc = component_add(&pdev->dev, &cam_ois_component_ops);
+	}
+
 	if (rc)
 		CAM_ERR(CAM_OIS, "failed to add component rc: %d", rc);
 

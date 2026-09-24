@@ -11,6 +11,9 @@
 #include "cam_debug_util.h"
 #include "camera_main.h"
 #include "cam_compat.h"
+/* xiaomi add for cci start */
+#include "cam_cci_debug_util.h"
+/* xiaomi add for cci end */
 
 static struct cam_i3c_eeprom_data {
 	struct cam_eeprom_ctrl_t                  *e_ctrl;
@@ -539,6 +542,17 @@ static int cam_eeprom_component_bind(struct device *dev,
 	g_i3c_eeprom_data[e_ctrl->soc_info.index].e_ctrl = e_ctrl;
 	init_completion(&g_i3c_eeprom_data[e_ctrl->soc_info.index].probe_complete);
 
+	/* xiaomi add for cci debug start */
+	rc = cam_cci_dev_create_debugfs_entry(e_ctrl->device_name,
+		e_ctrl->soc_info.index, CAM_EEPROM_NAME,
+		&e_ctrl->io_master_info, e_ctrl->cci_i2c_master,
+		&e_ctrl->cci_debug);
+	if (rc) {
+		CAM_WARN(CAM_EEPROM, "debugfs creation failed");
+		rc = 0;
+	}
+	/* xiaomi add for cci debug end */
+
 	return rc;
 free_soc:
 	kfree(soc_private);
@@ -586,6 +600,9 @@ static void cam_eeprom_component_unbind(struct device *dev,
 	mutex_unlock(&(e_ctrl->eeprom_mutex));
 	mutex_destroy(&(e_ctrl->eeprom_mutex));
 	cam_unregister_subdev(&(e_ctrl->v4l2_dev_str));
+	/* xiaomi add for cci debug start */
+	cam_cci_dev_remove_debugfs_entry((void *)e_ctrl->cci_debug);
+	/* xiaomi add for cci debug end */
 	kfree(soc_info->soc_private);
 	kfree(e_ctrl->io_master_info.cci_client);
 	platform_set_drvdata(pdev, NULL);
@@ -602,9 +619,27 @@ static int32_t cam_eeprom_platform_driver_probe(
 	struct platform_device *pdev)
 {
 	int rc = 0;
+	int hw_device = -1;
+	int customEnable = -1;
+	int customHwid = -1;
+	hw_device = cam_get_hw_device();
+	of_property_read_u32(pdev->dev.of_node, "custom-enable", &customEnable);
+	of_property_read_u32(pdev->dev.of_node, "custom-hwid", &customHwid);
 
-	CAM_DBG(CAM_EEPROM, "Adding EEPROM Sensor component");
-	rc = component_add(&pdev->dev, &cam_eeprom_component_ops);
+	if (customEnable == 1)
+	{
+		if (hw_device == customHwid)
+		{
+			CAM_DBG(CAM_EEPROM, "Adding EEPROM Sensor component");
+			rc = component_add(&pdev->dev, &cam_eeprom_component_ops);
+		}
+	}
+	else
+	{
+		CAM_DBG(CAM_EEPROM, "Adding EEPROM Sensor component");
+		rc = component_add(&pdev->dev, &cam_eeprom_component_ops);
+	}	
+
 	if (rc)
 		CAM_ERR(CAM_EEPROM, "failed to add component rc: %d", rc);
 

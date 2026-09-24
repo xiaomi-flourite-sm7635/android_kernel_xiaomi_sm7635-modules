@@ -1785,3 +1785,13 @@ ucfg_scan_get_user_config_sched_scan_plan(struct wlan_objmgr_psoc *psoc)
 	return scan_obj->pno_cfg.user_config_sched_scan_plan;
 }
 #endif
+
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+QDF_STATUS ucfg_scan_add_result(struct wlan_objmgr_pdev *pdev,
+		struct scan_cache_entry *params, uint8_t *ie, uint32_t ie_len)
+{
+	return scm_add_scan_result(pdev, params, ie, ie_len);
+}
+#endif
+// END WIFI_P2pEnhance

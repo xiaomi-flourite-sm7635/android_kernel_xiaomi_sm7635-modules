@@ -1,1 +1,7 @@
+ifeq ($(TARGET_PRODUCT),flourite)
+# Both frontends share driver/ objects. Build only the ABI used by P16U;
+# building both in parallel also races while generating the shared objects.
+obj-m := msm_video/
+else
 obj-m := msm_video/ video/
+endif

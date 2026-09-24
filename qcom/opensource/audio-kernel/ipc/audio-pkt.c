@@ -36,10 +36,20 @@
 static void *audio_pkt_ilctxt;
 
 static int audio_pkt_debug_mask;
+static struct sk_buff_head audio_pkt_backup_buffers;
+static struct work_struct audio_pkt_skb_backup_work;
 module_param_named(debug_mask, audio_pkt_debug_mask, int, 0664);
 
 #define APM_CMD_SHARED_MEM_MAP_REGIONS		0x0100100C
 #define APM_MEMORY_MAP_BIT_MASK_IS_OFFSET_MODE	0x00000004UL
+#define AUDIO_PKT_BUF_SIZE SZ_4K
+#define AUDIO_PKT_BACKUP_BUFFERS_NUM 10
+#define APM_CMD_GRAPH_CLOSE         0x01001004
+#define APM_CMD_GRAPH_OPEN          0x01001000
+#define APM_CMD_SET_CFG         0x01001006
+#define APM_CMD_GRAPH_STOP          0x01001003
+#define APM_CMD_GRAPH_START         0x01001002
+
 enum {
 	AUDIO_PKT_INFO = 1U << 0,
 };
@@ -58,6 +68,11 @@ do {									      \
 	ipc_log_string(audio_pkt_ilctxt, "[%s]: "x, __func__, ##__VA_ARGS__); \
 } while (0)
 
+#define AUDIO_PKT_IPC_INFO(x, ...)						\
+do {									\
+	ipc_log_string(audio_pkt_ilctxt,			\
+		"[%s]: "x, __func__, ##__VA_ARGS__);		\
+} while (0)
 
 #define MODULE_NAME "audio-pkt"
 #define MINOR_NUMBER_COUNT 1
@@ -65,6 +80,10 @@ do {									      \
 #define CHANNEL_NAME "adsp_apps"
 #define MAX_PACKET_SIZE 4096
 
+struct spf_cmd_basic_rsp {
+	uint32_t opcode;
+	int32_t status;
+};
 
 enum audio_pkt_state {
 	AUDIO_PKT_INIT,
@@ -458,6 +477,29 @@ static const struct file_operations audio_pkt_fops = {
 	.poll = audio_pkt_poll,
 };
 
+static void audio_pkt_alloc_backup(struct work_struct *work)
+{
+	struct sk_buff *skb;
+
+	AUDIO_PKT_INFO("%s: size of backup buffers queue %d\n",
+		__func__, skb_queue_len(&audio_pkt_backup_buffers));
+	while (skb_queue_len(&audio_pkt_backup_buffers) < AUDIO_PKT_BACKUP_BUFFERS_NUM) {
+		skb = alloc_skb(AUDIO_PKT_BUF_SIZE, GFP_ATOMIC);
+		if (!skb) {
+			AUDIO_PKT_ERR("%s: [TF-STABILITY]: failed, size of bkp buffers queue %d\n", __func__,
+				skb_queue_len(&audio_pkt_backup_buffers));
+			break;
+		}
+		skb_queue_tail(&audio_pkt_backup_buffers, skb);
+	}
+}
+
+static struct sk_buff *audio_pkt_get_backup(void) {
+	struct sk_buff *buf = skb_dequeue(&audio_pkt_backup_buffers);
+	queue_work(system_unbound_wq, &audio_pkt_skb_backup_work);
+	return buf;
+}
+
 /**
  * audio_pkt_srvc_callback() - Callback from gpr driver
  * adev:	pointer to the gpr device of this audio packet device
@@ -475,15 +517,34 @@ static int audio_pkt_srvc_callback(struct gpr_device *adev,
 	struct sk_buff *skb;
 	struct gpr_hdr *hdr = (struct gpr_hdr *)data;
 	uint16_t hdr_size, pkt_size;
+	struct spf_cmd_basic_rsp *basic_rsp;
 	hdr_size = GPR_PKT_GET_HEADER_BYTE_SIZE(hdr->header);
 	pkt_size = GPR_PKT_GET_PACKET_BYTE_SIZE(hdr->header);
-
     AUDIO_PKT_INFO("%s: header %d packet %d \n",
 		__func__,hdr_size, pkt_size);
 
+	if(hdr->opcode == GPR_IBASIC_RSP_RESULT) {
+		basic_rsp = GPR_PKT_GET_PAYLOAD(
+			struct spf_cmd_basic_rsp, hdr);
+		if(basic_rsp->opcode == APM_CMD_GRAPH_OPEN ||
+				basic_rsp->opcode == APM_CMD_GRAPH_CLOSE ||
+				basic_rsp->opcode == APM_CMD_SET_CFG ||
+				basic_rsp->opcode == APM_CMD_GRAPH_STOP ||
+				basic_rsp->opcode == APM_CMD_GRAPH_START) {
+			AUDIO_PKT_IPC_INFO("audio-pkt callback opcode:0x%x token:0x%x\n", basic_rsp->opcode, hdr->token);
+		}
+	}
 	skb = alloc_skb(pkt_size, GFP_ATOMIC);
-	if (!skb)
+	if (!skb) {
+		AUDIO_PKT_ERR("[TF-STABILITY]:alloc skb pkt_size %d failed\n", pkt_size);
+		skb = audio_pkt_get_backup();
+		if (!skb) {
+			dev_err(&adev->dev, "%s: [TF-STABILITY]: get backup skb buffers failed\n",
+					__func__);
+			return -ENOMEM;
+		}
 		return -ENOMEM;
+	}
 
 	skb_put_data(skb, data, pkt_size);
 
@@ -660,6 +721,10 @@ static int audio_pkt_platform_driver_probe(struct platform_device *pdev)
 	cdev_init(&audpkt_dev->cdev, &audio_pkt_fops);
 	audpkt_dev->cdev.owner = THIS_MODULE;
 
+	skb_queue_head_init(&audio_pkt_backup_buffers);
+	INIT_WORK(&audio_pkt_skb_backup_work, audio_pkt_alloc_backup);
+	queue_work(system_unbound_wq, &audio_pkt_skb_backup_work);
+
 	ret = cdev_add(&audpkt_dev->cdev, audpkt_dev->audio_pkt_major,
 		       MINOR_NUMBER_COUNT);
 	if (ret) {
@@ -676,6 +741,7 @@ static int audio_pkt_platform_driver_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, ap_priv);
+	audio_pkt_ilctxt = ipc_log_context_create(AUDIO_PKT_IPC_LOG_PAGE_CNT, audpkt_dev->dev_name, 0);
 	AUDIO_PKT_INFO("Audio Packet Port Driver Initialized\n");
 
 	goto done;
@@ -722,6 +788,9 @@ static int audio_pkt_platform_driver_remove(struct platform_device *adev)
 	}
 
 	//of_platform_depopulate(&adev->dev);
+	cancel_work_sync(&audio_pkt_skb_backup_work);
+	skb_queue_purge(&audio_pkt_backup_buffers);
+	ipc_log_context_destroy(audio_pkt_ilctxt);
 	AUDIO_PKT_INFO("Audio Packet Port Driver Removed\n");
 
 	return 0;

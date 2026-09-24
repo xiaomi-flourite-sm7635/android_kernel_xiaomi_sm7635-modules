@@ -1173,4 +1173,21 @@ bool ucfg_scan_is_snr_monitor_enabled(struct wlan_objmgr_psoc *psoc)
 {
 	return wlan_scan_is_snr_monitor_enabled(psoc);
 }
+
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+
+/**
+ * ucfg_scan_get_result() - The Public API to add scan results
+ * @pdev: pdev info
+ * @scan_entry: Scan entry
+ *
+ * This function add scan result
+ *
+ * Return: 0 for success or error code.
+ */
+QDF_STATUS ucfg_scan_add_result(struct wlan_objmgr_pdev *pdev,
+		struct scan_cache_entry *params, uint8_t *ie, uint32_t ie_len);
+#endif
+// END WIFI_P2pEnhance
 #endif

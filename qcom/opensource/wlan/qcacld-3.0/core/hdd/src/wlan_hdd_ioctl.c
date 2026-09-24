@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -24,6 +24,7 @@
 #include <wlan_hdd_wowl.h>
 #include <wlan_hdd_stats.h>
 #include "cfg_ucfg_api.h"
+#include "wlan_hdd_wext.h"
 #include "wlan_hdd_trace.h"
 #include "wlan_hdd_ioctl.h"
 #include "wlan_hdd_power.h"
@@ -2830,6 +2831,29 @@ static int drv_cmd_get_country(struct wlan_hdd_link_info *link_info,
 	return ret;
 }
 
+/**
+ * set APF working status per WLAN chip's suspend monitor mode
+ * @adapter: pointer to adapter on which request is received
+ * Return: On success 0, negative value on error.
+ */
+static int drv_apf_enable(struct hdd_adapter *adapter, bool apf_enable)
+{
+/*
+	QDF_STATUS status;
+	hdd_prevent_suspend(WIFI_POWER_EVENT_WAKELOCK_WOW);
+	status = sme_set_apf_enable_disable(hdd_adapter_get_mac_handle(adapter),
+					    adapter->deflink->vdev_id, apf_enable);
+	if (!QDF_IS_STATUS_SUCCESS(status)) {
+		hdd_err("Unable to post sme apf enable/disable message (status-%d)",
+				status);
+		return -EINVAL;
+	}
+	adapter->apf_context.apf_enabled = apf_enable;
+	hdd_allow_suspend(WIFI_POWER_EVENT_WAKELOCK_WOW);
+*/
+	return 0;
+}
+
 static int drv_cmd_set_roam_trigger(struct wlan_hdd_link_info *link_info,
 				    struct hdd_context *hdd_ctx,
 				    uint8_t *command,
@@ -3254,26 +3278,14 @@ static int drv_cmd_set_suspend_mode(struct wlan_hdd_link_info *link_info,
 		return -EINVAL;
 	}
 
-	hdd_debug("idle_monitor:%d, configure apf per screen state = %d",
-		  idle_monitor,
-		  ucfg_pmo_is_configure_apf_per_screen_state(hdd_ctx->psoc));
-
-	if (sme_get_dhcp_status(hdd_ctx->mac_handle, link_info->vdev_id)) {
-		hdd_nofl_debug("DHCP in progress. Ignore SETSUSPEND command");
-		return 0;
-	}
-
-	if (ucfg_pmo_is_configure_apf_per_screen_state(hdd_ctx->psoc)) {
-		if (idle_monitor == 0)
-			hdd_disable_active_apf_mode(link_info);
-		else if (idle_monitor == 1)
-			hdd_enable_active_apf_mode(link_info);
-	}
-
-	if (sme_get_dhcp_status(hdd_ctx->mac_handle, link_info->vdev_id)) {
-		hdd_nofl_debug("DHCP in progress. Ignore SETSUSPEND command");
-		return 0;
-	}
+	//MIUI: ADD
+	//idle_monitor: 0-screen on/monitor off/APF disable, 1: screen off/monitor on/APF enable.
+	drv_apf_enable(adapter, idle_monitor);
+	hdd_debug("APF status idle_monitor:%d", idle_monitor);
+	if (idle_monitor == 0)
+		hdd_disable_active_apf_mode(link_info);
+	else if (idle_monitor == 1)
+		hdd_enable_active_apf_mode(link_info);
 
 	status = ucfg_pmo_tgt_psoc_send_idle_roam_suspend_mode(hdd_ctx->psoc,
 							       idle_monitor);
@@ -3558,7 +3570,7 @@ void hdd_get_roam_scan_ch_cb(hdd_handle_t hdd_handle,
 	osif_request_put(request);
 }
 
-static int
+static uint32_t
 hdd_get_roam_chan_from_fw(struct hdd_adapter *adapter, uint32_t *chan_list,
 			  uint8_t *num_channels)
 {
@@ -3628,7 +3640,7 @@ hdd_get_roam_scan_freq(struct hdd_adapter *adapter, mac_handle_t mac_handle,
 	if (is_roam_ch_from_fw_supported(adapter->hdd_ctx)) {
 		ret = hdd_get_roam_chan_from_fw(adapter, chan_list,
 						num_channels);
-		if (ret) {
+		if (ret != QDF_STATUS_SUCCESS) {
 			hdd_err("failed to get roam scan channel list from FW");
 			return -EFAULT;
 		}
@@ -5503,6 +5515,41 @@ static int drv_cmd_set_app2_params(struct wlan_hdd_link_info *link_info,
 }
 #endif /* WLAN_FEATURE_EXTWOW_SUPPORT */
 
+#ifdef CFG_SUPPORT_SCAN_EXT_FLAG
+/*
+ * argv: 1 means that force scan on gaming mode
+ */
+static int driver_cmd_set_scan_ext_flag(struct wlan_hdd_link_info *link_info,
+				   struct hdd_context *hdd_ctx,
+				   uint8_t *command,
+				   uint8_t command_len,
+				   struct hdd_priv_data *priv_data)
+{
+	int ret = 0;
+	uint8_t *value = command;
+	uint8_t external_flag = 0;
+
+	/* Move pointer to ahead of SetScanExtFlag */
+	value = value + command_len + 1;
+
+	/* Convert the value from ascii to integer */
+	ret = kstrtou8(value, 10, &external_flag);
+	if (ret < 0) {
+		/*
+		 * If the input value is greater than max value of datatype,
+		 * then also kstrtou8 fails
+		 */
+		hdd_err("kstrtou8 failed Input value may be out of range");
+		ret = -EINVAL;
+		return ret;
+	}
+
+	link_info->adapter->scan_ext_flag = external_flag;
+	hdd_debug("driver_cmd_set_scan_ext_flag: %d ", link_info->adapter->scan_ext_flag);
+	return ret;
+}
+#endif /* CFG_SUPPORT_SCAN_EXT_FLAG */
+
 #ifdef FEATURE_WLAN_TDLS
 /**
  * drv_cmd_tdls_secondary_channel_offset() - secondary tdls off channel offset
@@ -6731,16 +6778,12 @@ static bool check_disable_channels(struct hdd_context *hdd_ctx,
 	    !hdd_ctx->original_channels->channel_info)
 		return false;
 
-	qdf_mutex_acquire(&hdd_ctx->cache_channel_lock);
 	num_channels = hdd_ctx->original_channels->num_channels;
 	for (i = 0; i < num_channels; i++) {
 		if (operating_freq ==
-		    hdd_ctx->original_channels->channel_info[i].freq) {
-			qdf_mutex_release(&hdd_ctx->cache_channel_lock);
+		    hdd_ctx->original_channels->channel_info[i].freq)
 			return true;
-		}
 	}
-	qdf_mutex_release(&hdd_ctx->cache_channel_lock);
 
 	return false;
 }
@@ -7362,6 +7405,33 @@ static int drv_cmd_get_function_call_map(struct wlan_hdd_link_info *link_info,
 }
 #endif
 
+static int drv_cmd_set_phymode(struct wlan_hdd_link_info *link_info,
+					struct hdd_context *hdd_ctx,
+					uint8_t *command,
+					uint8_t command_len,
+					struct hdd_priv_data *priv_data)
+{
+	int ret = 0;
+	uint8_t *value = command;
+	uint8_t new_phymode = 0;
+	/* Move pointer to ahead of SET_PHYMODE<delimiter> */
+	value = value + command_len + 1;
+	/* Convert the value from ascii to integer */
+	ret = kstrtou8(value, 10, &new_phymode);
+	if (ret < 0) {
+		/*
+		 * If the input value is greater than max value of datatype,
+		 * then also kstrtou8 fails
+		 */
+		hdd_err("kstrtou8 failed Input value may be out of range");
+		ret = -EINVAL;
+		goto exit;
+	}
+	//hdd_we_update_phymode(link_info, new_phymode);
+exit:
+	return ret;
+}
+
 /*
  * The following table contains all supported WLAN HDD
  * IOCTL driver commands and the handler for each of them.
@@ -7473,12 +7543,16 @@ static const struct hdd_drv_cmd hdd_drv_cmds[] = {
 	{"GET_FUNCTION_CALL_MAP",     drv_cmd_get_function_call_map, true},
 #endif
 	{"STOP",                      drv_cmd_dummy, false},
+	{"SET_PHYMODE",               drv_cmd_set_phymode, true},
 	/* Deprecated commands */
 	{"RXFILTER-START",            drv_cmd_dummy, false},
 	{"RXFILTER-STOP",             drv_cmd_dummy, false},
 	{"BTCOEXSCAN-START",          drv_cmd_dummy, false},
 	{"BTCOEXSCAN-STOP",           drv_cmd_dummy, false},
 	{"GET_SOFTAP_LINK_SPEED",     drv_cmd_get_sap_go_linkspeed, true},
+#ifdef CFG_SUPPORT_SCAN_EXT_FLAG
+	{"SetScanExtFlag",            driver_cmd_set_scan_ext_flag, true},
+#endif
 #ifdef CONFIG_BAND_6GHZ
 	{"GET_WIFI6E_CHANNELS",       drv_cmd_get_wifi6e_channels, true},
 #endif

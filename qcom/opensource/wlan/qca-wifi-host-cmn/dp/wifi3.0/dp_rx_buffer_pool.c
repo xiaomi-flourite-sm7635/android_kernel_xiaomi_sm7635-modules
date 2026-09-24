@@ -426,4 +426,6 @@ void dp_rx_buffer_pool_deinit(struct dp_soc *soc, u8 mac_id)
 
 	buff_pool->is_initialized = false;
 }
+
 #endif /* WLAN_FEATURE_RX_PREALLOC_BUFFER_POOL */
+

@@ -10,6 +10,14 @@
 #include <linux/types.h>
 #include "hfi_property.h"
 
+/* Firmware sizing macros intentionally accept mixed integer types. */
+#ifndef MAX
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#endif
+#ifndef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
 typedef u8      HFI_U8;
 typedef s8      HFI_S8;
 typedef u16     HFI_U16;

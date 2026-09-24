@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  */
-
+#define DEBUG
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
@@ -61,6 +61,7 @@
 #define WCD_USBSS_READ false
 #define WCD_USBSS_DP_EN 0x1E
 #define WCD_USBSS_DN_EN 0x21
+#define WCD_USBSS_FSM_OVERRIDE 0x63
 #define P_THRESH_SEL_MASK 0x0E
 #define P_THRESH_SEL_SHIFT 0x01
 #define VTH_4P0 0x04
@@ -632,12 +633,6 @@ static int wcd939x_parse_port_mapping(struct device *dev,
 
 	for (i = 0; i < map_length; i++) {
 		port_num = dt_array[NUM_SWRS_DT_PARAMS * i];
-
-		if (port_num >= MAX_PORT || ch_iter >= MAX_CH_PER_PORT) {
-			dev_err(dev, "%s: Invalid port or channel number\n", __func__);
-			goto err_pdata_fail;
-		}
-
 		slave_port_type = dt_array[NUM_SWRS_DT_PARAMS * i + 1];
 		ch_mask = dt_array[NUM_SWRS_DT_PARAMS * i + 2];
 		ch_rate = dt_array[NUM_SWRS_DT_PARAMS * i + 3];
@@ -758,6 +753,14 @@ static int wcd939x_rx_clk_enable(struct snd_soc_component *component, int rx_num
 	}
 	wcd939x->rx_clk_cnt++;
 
+/*
+	if (wcd939x->hph_pcm_enabled && (rx_num != WCD_RX3)) {
+		snd_soc_component_update_bits(component,
+				REG_FIELD_VALUE(PA_GAIN_CTL_L, RX_SUPPLY_LEVEL, 0x01));
+		snd_soc_component_update_bits(component,
+				REG_FIELD_VALUE(VNEG_CTRL_4, ILIM_SEL, 0x02));
+	}
+*/
 	return 0;
 }
 
@@ -1103,6 +1106,22 @@ static int wcd939x_config_xtalk(struct snd_soc_component *component,
 			snd_soc_component_read(component, xtalk_sec0),
 			snd_soc_component_read(component, xtalk_sec1));
 
+		/* for HPHL XTALK */
+//		if(xtalk_indx == 0) {
+			/* xtalk_sec0: WCD939X_HPHL_RX_PATH_SEC0 - 0x3521 */
+			/* xtalk_sec1: WCD939X_HPHL_RX_PATH_SEC1 - 0x3522 */
+//			snd_soc_component_update_bits(component, xtalk_sec1, 0xFF, 0x42);
+//			snd_soc_component_update_bits(component, xtalk_sec0, 0x1F, 0x05);
+//		}
+		/* for HPHR XTALK */
+//		if(xtalk_indx == 1) {
+			/* xtalk_sec0: WCD939X_HPHR_RX_PATH_SEC0 - 0x3525 */
+			/* xtalk_sec1: WCD939X_HPHR_RX_PATH_SEC1 - 0x3526 */
+//			snd_soc_component_update_bits(component, xtalk_sec1, 0xFF, 0x44);
+//			snd_soc_component_update_bits(component, xtalk_sec0, 0x1F, 0x05);
+//		}
+
+
 		snd_soc_component_update_bits(component, xtalk_sec3, 0xFF, 0x4F);
 		snd_soc_component_update_bits(component, xtalk_sec2, 0x1F, 0x11);
 
@@ -1378,6 +1397,8 @@ static int wcd939x_codec_ear_dac_event(struct snd_soc_dapm_widget *w,
 	case SND_SOC_DAPM_PRE_PMU:
 		snd_soc_component_update_bits(component,
 				REG_FIELD_VALUE(CDC_EAR_GAIN_CTL, EAR_EN, 0x01));
+		snd_soc_component_update_bits(component,
+				REG_FIELD_VALUE(CDC_DIG_CLK_CTL, RXD2_CLK_EN, 0x01));
 
 		snd_soc_component_update_bits(component,
 				REG_FIELD_VALUE(EAR_DAC_CON, DAC_SAMPLE_EDGE_SEL, 0x00));
@@ -1391,6 +1412,8 @@ static int wcd939x_codec_ear_dac_event(struct snd_soc_dapm_widget *w,
 			REG_FIELD_VALUE(VNEG_CTRL_4, ILIM_SEL, 0xD));
 		break;
 	case SND_SOC_DAPM_POST_PMD:
+		snd_soc_component_update_bits(component,
+				REG_FIELD_VALUE(CDC_DIG_CLK_CTL, RXD2_CLK_EN, 0x00));
 		snd_soc_component_update_bits(component,
 				REG_FIELD_VALUE(EAR_DAC_CON, DAC_SAMPLE_EDGE_SEL, 0x01));
 		break;
@@ -1541,7 +1564,8 @@ static int wcd939x_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
 					REG_FIELD_VALUE(PDM_WD_CTL1, PDM_WD_EN, 0x00));
 #if IS_ENABLED(CONFIG_QCOM_WCD_USBSS_I2C)
 		if (wcd939x->mbhc->wcd_mbhc.mbhc_cfg->enable_usbc_analog &&
-			!(snd_soc_component_read(component, WCD939X_HPH) & 0XC0))
+			(!(snd_soc_component_read(component, WCD939X_HPH) & 0XC0)) &&
+                        wcd939x->adc_count == 0)
 			wcd_usbss_audio_config(NULL, WCD_USBSS_CONFIG_TYPE_POWER_MODE, 1);
 #endif
 		wcd_cls_h_fsm(component, &wcd939x->clsh_info,
@@ -1696,7 +1720,8 @@ static int wcd939x_codec_enable_hphl_pa(struct snd_soc_dapm_widget *w,
 					REG_FIELD_VALUE(PDM_WD_CTL0, PDM_WD_EN, 0x00));
 #if IS_ENABLED(CONFIG_QCOM_WCD_USBSS_I2C)
 		if (wcd939x->mbhc->wcd_mbhc.mbhc_cfg->enable_usbc_analog &&
-			!(snd_soc_component_read(component, WCD939X_HPH) & 0XC0))
+			(!(snd_soc_component_read(component, WCD939X_HPH) & 0XC0)) &&
+                        wcd939x->adc_count == 0)
 			wcd_usbss_audio_config(NULL, WCD_USBSS_CONFIG_TYPE_POWER_MODE, 1);
 #endif
 		wcd_cls_h_fsm(component, &wcd939x->clsh_info,
@@ -2414,6 +2439,12 @@ static int wcd939x_enable_req(struct snd_soc_dapm_widget *w,
 				REG_FIELD_VALUE(CDC_DIG_CLK_CTL, TXD0_CLK_EN, 0x01));
 			break;
 		case 1:
+#if IS_ENABLED(CONFIG_QCOM_WCD_USBSS_I2C)
+		/* update USBSS power mode for AATC */
+		if (wcd939x->mbhc->wcd_mbhc.mbhc_cfg->enable_usbc_analog)
+			wcd_usbss_audio_config(NULL, WCD_USBSS_CONFIG_TYPE_POWER_MODE,
+				4);
+#endif
 			snd_soc_component_update_bits(component,
 				WCD939X_CDC_TX_ANA_MODE_0_1, 0xF0,
 				mode << 4);
@@ -2473,6 +2504,12 @@ static int wcd939x_enable_req(struct snd_soc_dapm_widget *w,
 					REG_FIELD_VALUE(CDC_ANA_CLK_CTL, ANA_TX_DIV2_CLK_EN, 0x00));
 			snd_soc_component_update_bits(component,
 					REG_FIELD_VALUE(CDC_ANA_CLK_CTL, ANA_TX_CLK_EN, 0x00));
+#if IS_ENABLED(CONFIG_QCOM_WCD_USBSS_I2C)
+			if (wcd939x->mbhc->wcd_mbhc.mbhc_cfg->enable_usbc_analog &&
+					(!(snd_soc_component_read(component, WCD939X_HPH) & 0XC0)) &&
+					wcd939x->adc_count == 0)
+				wcd_usbss_audio_config(NULL, WCD_USBSS_CONFIG_TYPE_POWER_MODE, 1);
+#endif
 		}
 		break;
 	};
@@ -3612,6 +3649,9 @@ static const struct snd_kcontrol_new wcd9390_snd_controls[] = {
 };
 
 static const struct snd_kcontrol_new wcd9395_snd_controls[] = {
+	SOC_ENUM_EXT("EAR PA GAIN", wcd939x_ear_pa_gain_enum,
+		wcd939x_ear_pa_gain_get, wcd939x_ear_pa_gain_put),
+
 	SOC_ENUM_EXT("RX HPH Mode", rx_hph_mode_mux_enum,
 		wcd939x_rx_hph_mode_get, wcd939x_rx_hph_mode_put),
 
@@ -4665,10 +4705,16 @@ static struct snd_soc_component_driver soc_codec_dev_wcd939x = {
 	.resume = wcd939x_soc_codec_resume,
 };
 
-#if IS_ENABLED(CONFIG_QCOM_WCD_USBSS_I2C)
 static void wcd_usbss_set_ovp_threshold(u32 threshold)
 {
 	uint32_t ovp_regs[2][2] = {{WCD_USBSS_DP_EN, 0x00}, {WCD_USBSS_DN_EN, 0x00}};
+        uint32_t fsm_4p0_regs[][2] = { {WCD_USBSS_FSM_OVERRIDE, 0x77} };
+        uint32_t fsm_4p2_regs[][2] = { {WCD_USBSS_FSM_OVERRIDE, 0x7f} };
+
+        if (threshold == VTH_4P0) {
+            wcd_usbss_register_update(fsm_4p0_regs, WCD_USBSS_WRITE,
+                      ARRAY_SIZE(fsm_4p0_regs));
+        }
 
 	/* Get current register values */
 	wcd_usbss_register_update(ovp_regs, WCD_USBSS_READ, ARRAY_SIZE(ovp_regs));
@@ -4679,8 +4725,12 @@ static void wcd_usbss_set_ovp_threshold(u32 threshold)
 	ovp_regs[1][1] |= (threshold << P_THRESH_SEL_SHIFT);
 	/* Write updated register values */
 	wcd_usbss_register_update(ovp_regs, WCD_USBSS_WRITE, ARRAY_SIZE(ovp_regs));
+
+        if (threshold == VTH_4P2) {
+            wcd_usbss_register_update(fsm_4p2_regs, WCD_USBSS_WRITE,
+                      ARRAY_SIZE(fsm_4p2_regs));
+        }
 }
-#endif
 
 static int wcd939x_reset(struct device *dev)
 {
@@ -4927,7 +4977,7 @@ static void wcd939x_dt_parse_usbcss_hs_info(struct device *dev,
 	} else
 		dev_dbg(dev, "%s: %s property not found. Default value of %s used.\n",
 			__func__, "qcom,usbcss-hs-xtalk-config", "XTALK_NONE");
-
+	usbcss_hs->xtalk.xtalk_config = XTALK_DIGITAL;
 	/* k values for linearizer */
 	if (of_find_property(dev->of_node, "qcom,usbcss-hs-lin-k-aud", NULL)) {
 		rc = wcd939x_read_of_property_s32(dev, "qcom,usbcss-hs-lin-k-aud",

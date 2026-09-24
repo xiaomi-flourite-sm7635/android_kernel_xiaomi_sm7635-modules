@@ -37,17 +37,14 @@
 /* Preprocessor definitions and constants */
 #define QDF_MAX_SGLIST 4
 
-#define __QDF_DECLARE_FLEX_ARRAY(type, name) \
-	struct { \
-		struct {} dummy_struct; \
-		type name[]; \
-	}
-
 /* Define a QDF macro for declaring flexible arrays */
 #define QDF_FLEX_ARRAY(type, name) \
 	union { \
 		type name ## _first_element; \
-		__QDF_DECLARE_FLEX_ARRAY(type, name); \
+		struct { \
+			struct {} dummy_struct; \
+			type name[]; \
+		}; \
 	}
 
 /*

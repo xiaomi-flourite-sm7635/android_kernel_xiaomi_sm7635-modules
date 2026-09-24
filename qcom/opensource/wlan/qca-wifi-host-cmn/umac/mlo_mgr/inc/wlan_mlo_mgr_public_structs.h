@@ -459,7 +459,7 @@ struct mlo_link_state_cmd_params {
  * struct ml_link_info - ml link information
  * @vdev_id: vdev id for this link
  * @link_id: link id defined as in 802.11 BE spec.
- * @link_status: inactive 0, active 1
+ * @link_status: active 1, inactive 0
  * @reserved: reserved bits
  * @chan_freq: Channel frequency in MHz
  */
@@ -694,7 +694,6 @@ struct mlnawds_config {
  * @ap_link_addr: Associated link BSSID
  * @link_chan_info: Associated link channel info
  * @is_link_active: link state
- * @link_status_code: wlan status code for link
  */
 struct mlo_link_info {
 	struct qdf_mac_addr link_addr;
@@ -714,7 +713,6 @@ struct mlo_link_info {
 	struct wlan_channel *link_chan_info;
 #endif
 	bool is_link_active;
-	enum wlan_status_code link_status_code;
 };
 
 /**
@@ -796,6 +794,7 @@ struct wlan_mlo_sta_assoc_pending_list {
  * @ml_partner_info: mlo partner link info
  * @emlsr_cap: EMLSR capabilities info
  * @link_force_ctx: set link force mode context
+ * @max_num_simultaneous_links: max num of simultaneous link
  * @ml_link_control_mode: link control mode configured via user space
  * @ml_chan_switch_in_progress: Flag to track CSA at MLD level
  */
@@ -826,6 +825,7 @@ struct wlan_mlo_sta {
 #endif
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
 	struct wlan_link_force_context link_force_ctx;
+	uint32_t max_num_simultaneous_links;
 #endif
 	uint8_t ml_link_control_mode;
 	bool ml_chan_switch_in_progress;
@@ -1323,8 +1323,7 @@ struct mlo_osif_ext_ops {
 
 	QDF_STATUS
 	(*mlo_mgr_osif_link_switch_notification)(struct wlan_objmgr_vdev *vdev,
-						 uint8_t non_trans_vdev_id,
-						 bool is_start_notify);
+						 uint8_t non_trans_vdev_id);
 };
 
 /* maximum size of vdev bitmap array for MLO link set active command */

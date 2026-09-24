@@ -60,7 +60,7 @@ struct hif_ipci_stats {
 #define PCIE_SOC_PCIE_REG_PCIE_SCRATCH_0_SOC_PCIE_REG (0x01E04000 + 0x40)
 
 /* Timeout duration to validate UMAC wake status */
-#define FORCE_WAKE_DELAY_TIMEOUT_MS 1000
+#define FORCE_WAKE_DELAY_TIMEOUT_MS 5000
 
 /* Validate UMAC status every 5ms */
 #define FORCE_WAKE_DELAY_MS 5

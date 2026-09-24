@@ -534,6 +534,16 @@ enum sde_wb_rot_type {
 	WB_ROT_JOB2,
 };
 
+/**
+ * enum sde_wfd_wcg_mode: WCG mode of the WB connector
+ * WFD_WCG_DISABLE: WB connector disabled WCG
+ * WFD_WCG_ENABLE: WB connector enabled WCG
+ */
+enum sde_wfd_wcg_mode {
+	WFD_WCG_DISABLE,
+	WFD_WCG_ENABLE
+};
+
 /** struct sde_format - defines the format configuration which
  * allows SDE HW to correctly fetch and decode the format
  * @base: base msm_format struture containing fourcc code

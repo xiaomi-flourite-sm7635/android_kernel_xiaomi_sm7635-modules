@@ -72,10 +72,6 @@ ucfg_user_space_enable_disable_rso(struct wlan_objmgr_pdev *pdev,
 	}
 	wlan_mlme_set_usr_disabled_roaming(psoc, !is_fast_roam_enabled);
 
-	if (is_fast_roam_enabled)
-		status = cm_roam_send_disable_config(psoc, vdev_id,
-						     !is_fast_roam_enabled);
-
 	/*
 	 * Supplicant_disabled_roaming flag is only effective for current
 	 * connection, it will be cleared during new connection.
@@ -575,7 +571,8 @@ ucfg_cm_get_neighbor_lookup_rssi_threshold(struct wlan_objmgr_psoc *psoc,
 {
 	struct cm_roam_values_copy temp;
 
-	wlan_cm_roam_cfg_get_value(psoc, vdev_id, NEXT_RSSI_THRESHOLD, &temp);
+	wlan_cm_roam_cfg_get_value(psoc, vdev_id,
+				   NEIGHBOUR_LOOKUP_THRESHOLD, &temp);
 	*lookup_threshold = temp.uint_value;
 
 	return QDF_STATUS_SUCCESS;

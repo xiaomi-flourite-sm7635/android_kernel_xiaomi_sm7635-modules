@@ -3004,53 +3004,6 @@ static void cam_icp_mgr_process_dbg_buf(struct cam_icp_hw_mgr *hw_mgr)
 	}
 }
 
-static int cam_icp_mgr_process_feature_property_ack(
-	struct cam_icp_hw_mgr *hw_mgr, uint32_t *msg_ptr)
-{
-	struct hfi_msg_init_done *init_done_ptr = (struct hfi_msg_init_done *)msg_ptr;
-	struct hfi_sys_camera_icp_fw_features *fw_features_ptr;
-	uint32_t *property_data_ptr = NULL;
-
-	CAM_DBG(CAM_ICP, "[%s] received num_props: %d", hw_mgr->hw_mgr_name,
-							init_done_ptr->num_prop);
-	property_data_ptr = &init_done_ptr->prop_data[0];
-	for (uint8_t i = 0; i < init_done_ptr->num_prop; i++) {
-		/*
-		 * ICP FW issues 1 property (HFI_PROP_SYS_SUPPORTED) by default.
-		 * This data is not used.
-		 * However, on few platforms (like, MilosIOT),
-		 * FW appends second property HFI_PROPERTY_SYS_ICP_FEATURE_SUPPORTED
-		 * check if this second property is set.
-		 */
-		switch (*property_data_ptr) {
-		case HFI_PROP_SYS_SUPPORTED:
-			CAM_DBG(CAM_ICP,
-				"[%s] skip to next property based on this property size",
-				hw_mgr->hw_mgr_name);
-			property_data_ptr = (uint32_t *)((uint8_t *)((struct hfi_sys_support *)
-						(init_done_ptr->prop_data + 1)) +
-						sizeof(struct hfi_sys_support));
-			break;
-
-		case HFI_PROP_SYS_ICP_FEATURE_SUPPORTED:
-			fw_features_ptr = (struct hfi_sys_camera_icp_fw_features *)
-						(property_data_ptr + 1);
-			hw_mgr->fw_feature_mask = fw_features_ptr->feature_mask;
-			CAM_DBG(CAM_ICP, "[%s] received fw_feature_mask: %d",
-					hw_mgr->hw_mgr_name, hw_mgr->fw_feature_mask);
-			break;
-
-		default:
-			CAM_DBG(CAM_ICP,
-				"[%s] HFI_MSG_SYS_ICP_FEATUREMASK_ACK property not set.	default fw_feature_mask to zero",
-				hw_mgr->hw_mgr_name);
-			hw_mgr->fw_feature_mask = 0;
-			break;
-		}
-	}
-	return 0;
-}
-
 static int cam_icp_process_msg_pkt_type(
 	struct cam_icp_hw_mgr *hw_mgr,
 	uint32_t *msg_ptr,
@@ -3062,7 +3015,6 @@ static int cam_icp_process_msg_pkt_type(
 	switch (msg_ptr[ICP_PACKET_TYPE]) {
 	case HFI_MSG_SYS_INIT_DONE:
 		CAM_DBG(CAM_ICP, "[%s] received SYS_INIT_DONE", hw_mgr->hw_mgr_name);
-		rc = cam_icp_mgr_process_feature_property_ack(hw_mgr, msg_ptr);
 		complete(&hw_mgr->icp_complete);
 		size_processed = (
 			(struct hfi_msg_init_done *)msg_ptr)->size;
@@ -3142,8 +3094,10 @@ static int32_t cam_icp_mgr_process_msg(void *priv, void *data)
 {
 	uint32_t read_len, msg_processed_len;
 	uint32_t *msg_ptr = NULL;
+	uint32_t *temp_read_buf = NULL;
 	struct hfi_msg_work_data *task_data;
 	struct cam_icp_hw_mgr *hw_mgr;
+	int temp_read_size = 0;
 	int rc = 0;
 
 	if (!data || !priv) {
@@ -3156,31 +3110,56 @@ static int32_t cam_icp_mgr_process_msg(void *priv, void *data)
 
 	rc = hfi_read_message(hw_mgr->hfi_handle, hw_mgr->msg_buf, Q_MSG,
 		ICP_MSG_BUF_SIZE_IN_WORDS, &read_len);
-	if (rc) {
-		CAM_DBG(CAM_ICP, "Unable to read msg q rc %d", rc);
-	} else {
+	if (!rc) {
 		read_len = read_len << BYTE_WORD_SHIFT;
 		msg_ptr = (uint32_t *)hw_mgr->msg_buf;
-		while (true) {
-			cam_icp_process_msg_pkt_type(hw_mgr, msg_ptr,
-				&msg_processed_len);
+	} else if (rc == -ENOMEM) {
+		/* Fails to read, need to read again using a larger buffer */
+		temp_read_size = ICP_MSG_Q_SIZE_IN_BYTES >> BYTE_WORD_SHIFT;
+		temp_read_buf = kzalloc(sizeof(uint32_t) * temp_read_size, GFP_KERNEL);
+		if (!temp_read_buf) {
+			rc = -ENOMEM;
+			goto end;
+		}
 
-			if (!msg_processed_len) {
-				CAM_ERR(CAM_ICP, "Failed to read");
-				rc = -EINVAL;
-				break;
-			}
+		rc = hfi_read_message(hw_mgr->hfi_handle, temp_read_buf, Q_MSG,
+			temp_read_size, &read_len);
+		if (rc)
+			goto end;
 
-			read_len -= msg_processed_len;
-			if (read_len > 0) {
-				msg_ptr += (msg_processed_len >>
-				BYTE_WORD_SHIFT);
-				msg_processed_len = 0;
-			} else {
-				break;
-			}
+		CAM_INFO(CAM_ICP, "Recovery for read succeeds, read_len = %u",
+			read_len);
+
+		read_len = read_len << BYTE_WORD_SHIFT;
+		msg_ptr = temp_read_buf;
+	} else if (rc) {
+		CAM_DBG(CAM_ICP, "Unable to read msg q rc %d", rc);
+		goto end;
+	}
+
+	while (true) {
+		cam_icp_process_msg_pkt_type(hw_mgr, msg_ptr,
+			&msg_processed_len);
+
+		if (!msg_processed_len) {
+			CAM_ERR(CAM_ICP, "Failed to read");
+			rc = -EINVAL;
+			break;
+		}
+
+		read_len -= msg_processed_len;
+		if (read_len > 0) {
+			msg_ptr += (msg_processed_len >>
+			BYTE_WORD_SHIFT);
+			msg_processed_len = 0;
+		} else {
+			break;
 		}
 	}
+
+end:
+	if (temp_read_buf)
+		kfree(temp_read_buf);
 
 	cam_icp_mgr_process_dbg_buf(hw_mgr);
 
@@ -5441,8 +5420,7 @@ static bool cam_icp_mgr_is_valid_outconfig(struct cam_packet *packet)
 		packet->io_configs_offset/4);
 
 	for (i = 0 ; i < packet->num_io_configs; i++)
-		if ((io_cfg_ptr[i].direction == CAM_BUF_OUTPUT) ||
-			(io_cfg_ptr[i].direction == CAM_BUF_IN_OUT))
+		if (io_cfg_ptr[i].direction == CAM_BUF_OUTPUT)
 			num_out_map_entries++;
 
 	if (num_out_map_entries <= CAM_MAX_OUT_RES) {
@@ -5599,20 +5577,13 @@ static int cam_icp_mgr_process_io_cfg(struct cam_icp_hw_mgr *hw_mgr,
 		if (io_cfg_ptr[i].direction == CAM_BUF_INPUT) {
 			sync_in_obj[j++] = io_cfg_ptr[i].fence;
 			prepare_args->num_in_map_entries++;
-		} else if ((io_cfg_ptr[i].direction == CAM_BUF_OUTPUT) ||
-			(io_cfg_ptr[i].direction == CAM_BUF_IN_OUT)) {
+		} else {
 			prepare_args->out_map_entries[k].sync_id =
 				io_cfg_ptr[i].fence;
 			prepare_args->out_map_entries[k].resource_handle =
 				io_cfg_ptr[i].resource_type;
 			k++;
 			prepare_args->num_out_map_entries++;
-		} else {
-			CAM_ERR(CAM_ICP, "dir: %d, max_out:%u, out %u",
-				io_cfg_ptr[i].direction,
-				prepare_args->max_out_map_entries,
-				prepare_args->num_out_map_entries);
-			return -EINVAL;
 		}
 
 		CAM_DBG(CAM_REQ,
@@ -5696,17 +5667,6 @@ static int cam_icp_process_stream_settings(
 				"%s: Failed to get cmd region iova for handle %u",
 				ctx_data->ctx_id_string,
 				cmd_mem_regions->map_info_array[i].mem_handle);
-			kfree(map_cmd);
-			return -EINVAL;
-		}
-
-		if (cmd_mem_regions->map_info_array[i].offset >= len) {
-			CAM_ERR(CAM_ICP,
-				"%s: Mem region offset exceeds length of the buffer, mem handle: 0x%x, iova: %pK, len: %u, offset: 0x%x",
-				ctx_data->ctx_id_string,
-				cmd_mem_regions->map_info_array[i].mem_handle,
-				(uint32_t)iova, (uint32_t)len,
-				cmd_mem_regions->map_info_array[i].offset);
 			kfree(map_cmd);
 			return -EINVAL;
 		}
@@ -5851,11 +5811,6 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 
 	switch (blob_type) {
 	case CAM_ICP_CMD_GENERIC_BLOB_CLK:
-		if (index < 0) {
-			CAM_ERR(CAM_ICP, "Invalid index %d", index);
-			return -EINVAL;
-		}
-
 		CAM_WARN_RATE_LIMIT_CUSTOM(CAM_PERF, 300, 1,
 			"Using deprecated blob type GENERIC_BLOB_CLK");
 		if (blob_size != sizeof(struct cam_icp_clk_bw_request)) {
@@ -5887,11 +5842,6 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 		break;
 
 	case CAM_ICP_CMD_GENERIC_BLOB_CLK_V2:
-		if (index < 0) {
-			CAM_ERR(CAM_ICP, "Invalid index %d", index);
-			return -EINVAL;
-		}
-
 		if (blob_size < sizeof(struct cam_icp_clk_bw_request_v2)) {
 			CAM_ERR(CAM_ICP, "%s: Mismatch blob size %d expected %lu",
 				ctx_data->ctx_id_string,
@@ -6039,11 +5989,6 @@ static int cam_icp_packet_generic_blob_handler(void *user_data,
 		break;
 
 	case CAM_ICP_CMD_GENERIC_BLOB_PRESIL_HANGDUMP:
-		if (index < 0) {
-			CAM_ERR(CAM_ICP, "Invalid index %d", index);
-			return -EINVAL;
-		}
-
 		if (cam_presil_mode_enabled()) {
 			cmd_mem_regions = (struct cam_cmd_mem_regions *)blob_data;
 			if (cmd_mem_regions->num_regions <= 0) {
@@ -7628,9 +7573,6 @@ static int cam_icp_mgr_get_hw_caps_v2(void *hw_mgr_priv, void *hw_caps_args)
 	query_cmd.dev_iommu_handle.non_secure = hw_mgr->iommu_hdl;
 	query_cmd.dev_iommu_handle.secure = hw_mgr->iommu_sec_hdl;
 
-	/* update params section with caps_v2 values */
-	query_cmd.params[0] = hw_mgr->fw_feature_mask;
-
 	if (copy_to_user(u64_to_user_ptr(query_cap->caps_handle),
 		&query_cmd, sizeof(struct cam_icp_query_cap_cmd_v2))) {
 		CAM_ERR(CAM_ICP, "[%s] copy_to_user failed", hw_mgr->hw_mgr_name);
@@ -8230,6 +8172,9 @@ int cam_icp_hw_mgr_init(struct device_node *of_node, uint64_t *hw_mgr_hdl,
 		return -ENOMEM;
 
 	hw_mgr->hw_mgr_id = device_idx;
+/* xiaomi add disable debug log default,use sys to enable debug log begin */
+	hw_mgr->icp_dbg_lvl = 1;
+/* xiaomi add disable debug log default,use sys to enable debug log end */
 
 	rc = cam_icp_mgr_get_hw_mgr_name(device_idx, hw_mgr->hw_mgr_name);
 	if (rc) {

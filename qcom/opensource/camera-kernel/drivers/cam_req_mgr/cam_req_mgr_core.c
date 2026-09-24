@@ -2805,6 +2805,7 @@ static int __cam_req_mgr_disconnect_link(struct cam_req_mgr_core_link *link)
 	for (i = 0; i < link->num_devs; i++) {
 		dev = &link->l_dev[i];
 		link_data.dev_hdl = dev->dev_hdl;
+		CAM_INFO(CAM_CRM, "link %p ops %p, link_setup %p link_hdl 0x%x name %s", link, dev->ops, dev->ops->link_setup, link->link_hdl, dev->dev_info.name);
 		if (dev->ops && dev->ops->link_setup) {
 			rc = dev->ops->link_setup(&link_data);
 			if (rc)
@@ -3970,6 +3971,7 @@ static int cam_req_mgr_process_trigger(void *priv, void *data)
 		 */
 		CAM_DBG(CAM_CRM, "link[%x] Req[%lld] invalidating slot",
 			link->link_hdl, in_q->slot[in_q->rd_idx].req_id);
+
 		rc = __cam_req_mgr_move_to_next_req_slot(link);
 		if (rc) {
 			CAM_DBG(CAM_REQ,
@@ -4631,7 +4633,7 @@ static int __cam_req_mgr_setup_link_info(struct cam_req_mgr_core_link *link,
 			link_data.trigger_id = num_trigger_devices;
 			num_trigger_devices++;
 		}
-
+		CAM_INFO(CAM_CRM, "link %p ops %p, link_setup %p link_hdl 0x%x name %s",link, dev->ops, dev->ops->link_setup, link->link_hdl, dev->dev_info.name);
 		/* Communicate with dev to establish the link */
 		dev->ops->link_setup(&link_data);
 
@@ -5147,7 +5149,6 @@ int cam_req_mgr_schedule_request(
 	CAM_DBG(CAM_CRM, "link 0x%x req %lld, sync_mode %d",
 		sched_req->link_hdl, sched_req->req_id, sched_req->sync_mode);
 
-	memset(&task_data, 0, sizeof(task_data));
 	task_data.type = CRM_WORKQ_TASK_SCHED_REQ;
 	sched = (struct cam_req_mgr_sched_request_v2 *)&task_data.u;
 	sched->req_id = sched_req->req_id;
@@ -5229,7 +5230,7 @@ int cam_req_mgr_schedule_request_v2(
 	}
 
 	if (sched_req->sync_mode == CAM_REQ_MGR_SYNC_MODE_SYNC) {
-		if ((sched_req->num_links <= 0) ||
+		if ((sched_req->num_links <= 0) &&
 			(sched_req->num_links > MAXIMUM_LINKS_PER_SESSION)) {
 			CAM_ERR(CAM_CRM, "link:0x%x req:%lld invalid num_links:%d",
 				link->link_hdl, sched_req->req_id, sched_req->num_links);

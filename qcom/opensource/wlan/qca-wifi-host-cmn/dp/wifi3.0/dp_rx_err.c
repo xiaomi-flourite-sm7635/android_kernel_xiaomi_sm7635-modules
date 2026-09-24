@@ -265,7 +265,7 @@ dp_rx_link_desc_return(struct dp_soc *soc, hal_ring_desc_t ring_desc,
  * @ring_desc: opaque pointer to the REO error ring descriptor
  * @mpdu_desc_info: MPDU descriptor information from ring descriptor
  * @mac_id: mac ID
- * @pn_err: PN Check failed
+ * @quota: No. of units (packets) that can be serviced in one shot.
  *
  * This function is used to drop all MSDU in an MPDU
  *
@@ -274,7 +274,8 @@ dp_rx_link_desc_return(struct dp_soc *soc, hal_ring_desc_t ring_desc,
 static uint32_t
 dp_rx_msdus_drop(struct dp_soc *soc, hal_ring_desc_t ring_desc,
 		 struct hal_rx_mpdu_desc_info *mpdu_desc_info,
-		 uint8_t *mac_id, bool pn_err)
+		 uint8_t *mac_id,
+		 uint32_t quota)
 {
 	uint32_t rx_bufs_used = 0;
 	void *link_desc_va;
@@ -339,18 +340,14 @@ more_msdu_link_desc:
 		rx_desc->rx_buf_start = qdf_nbuf_data(rx_desc->nbuf);
 
 		rx_bufs_used++;
+		tid = hal_rx_mpdu_start_tid_get(soc->hal_soc,
+						rx_desc->rx_buf_start);
+		dp_rx_err_err("%pK: Packet received with PN error for tid :%d",
+			      soc, tid);
 
-		if (pn_err) {
-			tid = hal_rx_mpdu_start_tid_get(soc->hal_soc,
-							rx_desc->rx_buf_start);
-			dp_rx_err_err("%pK: Packet with PN error for tid :%d",
-				      soc, tid);
-
-			rx_tlv_hdr = qdf_nbuf_data(rx_desc->nbuf);
-			if (hal_rx_encryption_info_valid(soc->hal_soc,
-							 rx_tlv_hdr))
-				hal_rx_print_pn(soc->hal_soc, rx_tlv_hdr);
-		}
+		rx_tlv_hdr = qdf_nbuf_data(rx_desc->nbuf);
+		if (hal_rx_encryption_info_valid(soc->hal_soc, rx_tlv_hdr))
+			hal_rx_print_pn(soc->hal_soc, rx_tlv_hdr);
 
 		dp_rx_err_send_pktlog(soc, pdev, mpdu_desc_info,
 				      rx_desc->nbuf,
@@ -395,7 +392,7 @@ more_msdu_link_desc:
 
 		goto more_msdu_link_desc;
 	}
-
+	quota--;
 	dp_rx_link_desc_return_by_addr(soc, buf_addr_info,
 				       HAL_BM_ACTION_PUT_IN_IDLE_LIST);
 	return rx_bufs_used;
@@ -453,7 +450,7 @@ dp_rx_pn_error_handle(struct dp_soc *soc, hal_ring_desc_t ring_desc,
 	if (!peer_pn_policy)
 		rx_bufs_used = dp_rx_msdus_drop(soc, ring_desc,
 						mpdu_desc_info,
-						mac_id, true);
+						mac_id, quota);
 
 	return rx_bufs_used;
 }
@@ -2217,7 +2214,7 @@ more_data:
 			if (qdf_unlikely(num_msdus > 1)) {
 				count = dp_rx_msdus_drop(soc, ring_desc,
 							 &mpdu_desc_info,
-							 &mac_id, false);
+							 &mac_id, quota);
 				rx_bufs_reaped[mac_id] += count;
 				goto next_entry;
 			}
@@ -2323,7 +2320,7 @@ process_reo_error_code:
 			DP_STATS_INC(soc, rx.err.reo_error[error_code], 1);
 			count = dp_rx_msdus_drop(soc, ring_desc,
 						 &mpdu_desc_info,
-						 &mac_id, false);
+						 &mac_id, quota);
 			rx_bufs_reaped[mac_id] += count;
 			break;
 		default:

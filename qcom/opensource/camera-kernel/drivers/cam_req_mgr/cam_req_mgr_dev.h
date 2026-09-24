@@ -6,6 +6,14 @@
 #ifndef _CAM_REQ_MGR_DEV_H_
 #define _CAM_REQ_MGR_DEV_H_
 
+#define P16U_hw_version_platform    14
+#define P16U_CN_country_ver         0
+#define P16U_P0_hw_version_build    0
+#define P16U_CN_P0                  0
+#define P16U_GL_P0                  1
+#define P16U_CN_P1                  2
+#define P16U_GL_P1                  3
+
 #include "media/cam_req_mgr.h"
 /**
  * struct cam_req_mgr_device - a camera request manager device
@@ -35,6 +43,8 @@ struct cam_req_mgr_device {
 	spinlock_t cam_eventq_lock;
 	bool shutdown_state;
 };
+
+int cam_get_hw_device(void);
 
 #define CAM_REQ_MGR_GET_PAYLOAD_PTR(ev, type)        \
 	(type *)((char *)ev.u.data)

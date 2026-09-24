@@ -2468,7 +2468,7 @@ void wlan_hdd_ft_set_key_delay(struct wlan_objmgr_vdev *vdev)
 
 	if (ucfg_cm_ft_key_ready_for_install(vdev))
 		errno =
-		wlan_cfg80211_crypto_add_key(vdev, NULL,
+		wlan_cfg80211_crypto_add_key(vdev,
 					     WLAN_CRYPTO_KEY_TYPE_UNICAST,
 					     0, false);
 	if (errno)
@@ -2912,7 +2912,6 @@ void hdd_roam_profile_init(struct wlan_hdd_link_info *link_info)
 }
 
 struct osif_cm_ops osif_ops = {
-	.connect_active_notify_cb = hdd_cm_connect_active_notify,
 	.connect_complete_cb = hdd_cm_connect_complete,
 	.disconnect_complete_cb = hdd_cm_disconnect_complete,
 	.netif_queue_control_cb = hdd_cm_netif_queue_control,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -55,6 +55,22 @@ static struct sde_csc_cfg sde_encoder_phys_wb_rgb2yuv_601l = {
 		TO_S15D16(0x0083), TO_S15D16(0x0102), TO_S15D16(0x0032),
 		TO_S15D16(0x1fb5), TO_S15D16(0x1f6c), TO_S15D16(0x00e1),
 		TO_S15D16(0x00e1), TO_S15D16(0x1f45), TO_S15D16(0x1fdc)
+	},
+	{ 0x00, 0x00, 0x00 },
+	{ 0x0040, 0x0200, 0x0200 },
+	{ 0x000, 0x3ff, 0x000, 0x3ff, 0x000, 0x3ff },
+	{ 0x040, 0x3ac, 0x040, 0x3c0, 0x040, 0x3c0 },
+};
+
+/*
+ * sde_rgb2yuv_bt2020l - rgb to yuv color space conversion matrix
+ *
+ */
+static struct sde_csc_cfg sde_encoder_phys_wb_rgb2yuv_bt2020l = {
+	{
+		TO_S15D16(0x0073), TO_S15D16(0x0129), TO_S15D16(0x0019),
+		TO_S15D16(0x1fc1), TO_S15D16(0x1f5e), TO_S15D16(0x00e0),
+		TO_S15D16(0x00e0), TO_S15D16(0x1f31), TO_S15D16(0x1fed)
 	},
 	{ 0x00, 0x00, 0x00 },
 	{ 0x0040, 0x0200, 0x0200 },
@@ -255,8 +271,16 @@ void sde_encoder_phys_setup_cdm(struct sde_encoder_phys *phys_enc, struct drm_fr
 	struct sde_encoder_phys_wb *wb_enc;
 	int ret;
 
+	struct drm_connector_state *conn_state;
+	enum sde_wb_usage_type usage_type;
+	enum sde_wfd_wcg_mode wcg_mode;
+
 	if (!phys_enc || !format)
 		return;
+
+	conn_state = phys_enc->connector->state;
+	usage_type = sde_connector_get_property(conn_state, CONNECTOR_PROP_WB_USAGE_TYPE);
+	wcg_mode = sde_connector_get_property(conn_state, CONNECTOR_PROP_WFD_WCG_MODE);
 
 	wb_enc = to_sde_encoder_phys_wb(phys_enc);
 	cdm_cfg = &phys_enc->cdm_cfg;
@@ -316,7 +340,13 @@ void sde_encoder_phys_setup_cdm(struct sde_encoder_phys *phys_enc, struct drm_fr
 		cdm_cfg->h_cdwn_type, cdm_cfg->v_cdwn_type);
 
 	if (hw_cdm && hw_cdm->ops.setup_csc_data) {
-		ret = hw_cdm->ops.setup_csc_data(hw_cdm, &sde_encoder_phys_wb_rgb2yuv_601l);
+		if (usage_type == WB_USAGE_WFD && wcg_mode == WFD_WCG_ENABLE) {
+			SDE_DEBUG("WFD_WCG: setup WB CSC with rgb2yuv_bt2020l matrix");
+			ret = hw_cdm->ops.setup_csc_data(hw_cdm, &sde_encoder_phys_wb_rgb2yuv_bt2020l);
+		} else {
+			ret = hw_cdm->ops.setup_csc_data(hw_cdm, &sde_encoder_phys_wb_rgb2yuv_601l);
+		}
+
 		if (ret < 0) {
 			SDE_ERROR("[enc:%d wb:%d] failed to setup CSC; ret:%d\n",
 					DRMID(phys_enc->parent), WBID(wb_enc), ret);
@@ -747,6 +777,10 @@ static void _sde_encoder_phys_wb_setup_ctl(struct sde_encoder_phys *phys_enc,
 	hw_cdm = phys_enc->hw_cdm;
 	hw_dnsc_blur = phys_enc->hw_dnsc_blur;
 	ctl = phys_enc->hw_ctl;
+#ifdef MI_DISPLAY_MODIFY
+	if (!ctl)
+		return;
+#endif
 	need_merge = !(_sde_encoder_is_single_lm_partial_update(wb_enc));
 
 	if (test_bit(SDE_CTL_ACTIVE_CFG, &ctl->caps->features) &&
@@ -1253,8 +1287,8 @@ static int sde_encoder_phys_wb_atomic_check(struct sde_encoder_phys *phys_enc,
 	}
 
 	if (phys_enc->parent->crtc != NULL && phys_enc->parent->crtc != crtc_state->crtc) {
-		SDE_ERROR("invalid crtc_id:%d connected to wb:%d, expected crtc_id:%d\n",
-			DRMID(phys_enc->parent->crtc), WBID(wb_enc), DRMID(crtc_state->crtc));
+		SDE_ERROR("invalid crtc_id:%d connected to wb:%d, expected crtc_id:%d",
+				DRMID(phys_enc->parent->crtc), WBID(wb_enc), DRMID(crtc_state->crtc));
 		return -EAGAIN;
 	}
 
@@ -1907,7 +1941,6 @@ static void _sde_encoder_phys_wb_frame_done_helper(void *arg, bool frame_error)
 
 		phys_enc->parent_ops.handle_frame_done(phys_enc->parent, phys_enc, event);
 	}
-
 	if (!in_clone_mode && phys_enc->parent_ops.handle_vblank_virt)
 		phys_enc->parent_ops.handle_vblank_virt(phys_enc->parent, phys_enc);
 
@@ -2000,11 +2033,12 @@ static void sde_encoder_phys_wb_irq_ctrl(struct sde_encoder_phys *phys, bool ena
 	 * For Dedicated CWB, only one overflow IRQ is used for
 	 * both the PP_CWB blks. Make sure only one IRQ is registered
 	 * when D-CWB is enabled.
-	 * For targets where DCWB and CWB support is not needed,
-	 * reset irq table to avoid registration of unsupported irqs.
 	 */
 	wb_cfg = wb_enc->hw_wb->caps;
-	if (wb_cfg->features & BIT(SDE_WB_HAS_CWB)) {
+	if (wb_cfg->features & BIT(SDE_WB_HAS_DCWB)) {
+		max_num_of_irqs = 1;
+		irq_table = dcwb_irq_tbl;
+	} else {
 		max_num_of_irqs = CRTC_DUAL_MIXERS_ONLY;
 		irq_table = cwb_irq_tbl;
 	}
@@ -2019,12 +2053,6 @@ static void sde_encoder_phys_wb_irq_ctrl(struct sde_encoder_phys *phys, bool ena
 		for (index = 0; index < max_num_of_irqs; index++)
 			if (irq_table[index + pp] != SDE_NONE)
 				sde_encoder_helper_register_irq(phys, irq_table[index + pp]);
-
-		/* Register overflow IRQ for associated Dedicated CWB */
-		if (phys->hw_pp->dcwb_idx == DCWB_0 || phys->hw_pp->dcwb_idx == DCWB_1)
-			sde_encoder_helper_register_irq(phys, INTR_IDX_PP_CWB_OVFL);
-		else if (phys->hw_pp->dcwb_idx == DCWB_2 || phys->hw_pp->dcwb_idx == DCWB_3)
-			sde_encoder_helper_register_irq(phys, INTR_IDX_PP_CWB2_OVFL);
 	} else if (!enable && atomic_dec_return(&phys->wbirq_refcount) == 0) {
 		sde_encoder_helper_unregister_irq(phys, INTR_IDX_WB_DONE);
 		sde_encoder_helper_unregister_irq(phys, INTR_IDX_CTL_START);
@@ -2035,12 +2063,6 @@ static void sde_encoder_phys_wb_irq_ctrl(struct sde_encoder_phys *phys, bool ena
 		for (index = 0; index < max_num_of_irqs; index++)
 			if (irq_table[index + pp] != SDE_NONE)
 				sde_encoder_helper_unregister_irq(phys, irq_table[index + pp]);
-
-		/* Unregister overflow IRQ for associated Dedicated CWB */
-		if (phys->hw_pp->dcwb_idx == DCWB_0 || phys->hw_pp->dcwb_idx == DCWB_1)
-			sde_encoder_helper_unregister_irq(phys, INTR_IDX_PP_CWB_OVFL);
-		else if (phys->hw_pp->dcwb_idx == DCWB_2 || phys->hw_pp->dcwb_idx == DCWB_3)
-			sde_encoder_helper_unregister_irq(phys, INTR_IDX_PP_CWB2_OVFL);
 	}
 }
 
@@ -2224,6 +2246,7 @@ static int _sde_encoder_phys_wb_wait_for_idle(struct sde_encoder_phys *phys_enc,
 			phys_enc->in_clone_mode);
 		SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc),
 			atomic_read(&phys_enc->pending_kickoff_cnt), SDE_EVTLOG_ERROR);
+		SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
 		goto frame_done;
 	}
 
@@ -2314,6 +2337,7 @@ static int sde_encoder_phys_wb_wait_for_commit_done(struct sde_encoder_phys *phy
 					atomic_read(&phys_enc->pending_kickoff_cnt), is_idle, rc);
 			SDE_ERROR("[enc:%d, wb:%d] failed wait_for_idle; ret:%d\n",
 					DRMID(phys_enc->parent), WBID(wb_enc), rc);
+			SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
 		}
 	}
 

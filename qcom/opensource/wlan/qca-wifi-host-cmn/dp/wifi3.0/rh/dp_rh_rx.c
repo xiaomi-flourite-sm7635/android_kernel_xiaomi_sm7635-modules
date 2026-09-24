@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -495,9 +495,6 @@ dp_rx_decrypt_unecrypt_err_handler_rh(struct dp_soc *soc, qdf_nbuf_t nbuf,
 			dp_rx_deliver_to_osif_stack_rh(soc, vdev, txrx_peer, nbuf, NULL,
 						       qdf_nbuf_is_ipv4_eapol_pkt(nbuf));
 		}
-	} else {
-		DP_STATS_INC(soc, rx.err.unencrypt_err_drop, 1);
-		goto free_nbuf;
 	}
 
 	if (txrx_peer)
@@ -536,8 +533,12 @@ dp_rx_2k_jump_oor_err_handler_rh(struct dp_soc *soc, qdf_nbuf_t nbuf,
 		goto free_nbuf;
 	}
 
-	frame_mask = FRAME_MASK_IPV4_ARP | FRAME_MASK_IPV4_DHCP |
-		FRAME_MASK_IPV4_EAPOL | FRAME_MASK_IPV6_DHCP;
+	if (error_code == HTT_RXDATA_ERR_OOR) {
+		frame_mask = FRAME_MASK_IPV4_ARP | FRAME_MASK_IPV4_DHCP |
+			FRAME_MASK_IPV4_EAPOL | FRAME_MASK_IPV6_DHCP;
+	} else {
+		frame_mask = FRAME_MASK_IPV4_ARP;
+	}
 
 	if (dp_rx_deliver_special_frame(soc, txrx_peer, nbuf, frame_mask,
 					rx_tlv_hdr)) {
@@ -628,6 +629,12 @@ static void dp_rx_mic_err_handler_rh(struct dp_soc *soc, qdf_nbuf_t nbuf)
 							  DP_MOD_ID_RX);
 			return;
 		}
+	}
+
+	if (qdf_unlikely(qdf_nbuf_is_rx_chfrag_cont(nbuf))) {
+		dp_err("Unsupported MSDU format rcvd in MIC error handler");
+		qdf_assert_always(0);
+		goto fail;
 	}
 
 	if (hal_rx_mpdu_get_addr1(soc->hal_soc, qdf_nbuf_data(nbuf),
@@ -746,8 +753,6 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 	uint32_t error_code;
 	QDF_STATUS status;
 	uint16_t buf_size;
-	qdf_nbuf_t err_list_head = NULL;
-	qdf_nbuf_t err_list_tail = NULL;
 
 	DP_HIST_INIT();
 
@@ -791,8 +796,6 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 	rx_ctx_id =
 		dp_rx_get_ctx_id_frm_napiid(QDF_NBUF_CB_RX_CTX_ID(data_ind));
 
-	dp_rx_per_core_stats_update(soc, rx_ctx_id, msdu_count);
-
 	while (qdf_likely(num_pending)) {
 		dp_rx_ring_record_entry_rh(soc, rx_ctx_id, msg_word);
 		rx_buf_cookie =
@@ -801,10 +804,7 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 		if (qdf_unlikely(!rx_desc && !rx_desc->nbuf &&
 				 !rx_desc->in_use)) {
 			dp_err("Invalid RX descriptor");
-			DP_STATS_INC(soc, rx.err.invalid_cookie, 1);
 			qdf_assert_always(0);
-			msg_word += HTT_RX_DATA_MSDU_INFO_SIZE >> 2;
-			continue;
 			/* TODO handle this if its valid case */
 		}
 
@@ -815,12 +815,6 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 			dp_info_rl("Nbuf sanity check failure!");
 			dp_rx_dump_info_and_assert_rh(soc, msg_word, rx_desc);
 			rx_desc->in_err_state = 1;
-			qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-					   QDF_TRACE_LEVEL_FATAL, msg_word,
-					   HTT_RX_DATA_MSDU_INFO_SIZE);
-			qdf_assert_always(0);
-			msg_word += HTT_RX_DATA_MSDU_INFO_SIZE >> 2;
-			num_pending--;
 			continue;
 		}
 
@@ -828,12 +822,6 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 			dp_err("Invalid rx_desc cookie=%d", rx_buf_cookie);
 			DP_STATS_INC(soc, rx.err.rx_desc_invalid_magic, 1);
 			dp_rx_dump_info_and_assert_rh(soc, msg_word, rx_desc);
-			qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-					   QDF_TRACE_LEVEL_FATAL, msg_word,
-					   HTT_RX_DATA_MSDU_INFO_SIZE);
-			qdf_assert_always(0);
-			msg_word += HTT_RX_DATA_MSDU_INFO_SIZE >> 2;
-			num_pending--;
 			continue;
 		}
 
@@ -935,37 +923,11 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 
 		error = HTT_RX_DATA_MSDU_INFO_ERROR_VALID_GET(*(msg_word + 3));
 		if (qdf_unlikely(error)) {
+			dp_rx_err("MSDU RX error encountered error:%u", error);
 			error_code =
 			HTT_RX_DATA_MSDU_INFO_ERROR_INFO_GET(*(msg_word + 3));
-			dp_rx_err("MSDU RX error encountered error:%u",
-				  error_code);
-			qdf_nbuf_set_next(rx_desc->nbuf, NULL);
-			if (qdf_nbuf_is_rx_chfrag_cont(rx_desc->nbuf)) {
-				if (!err_list_head) {
-					err_list_head = rx_desc->nbuf;
-					err_list_tail = rx_desc->nbuf;
-				} else {
-					qdf_nbuf_set_next(err_list_tail,
-							  rx_desc->nbuf);
-					err_list_tail = rx_desc->nbuf;
-				}
-			} else {
-				if (err_list_tail) {
-					qdf_nbuf_set_next(err_list_tail,
-							  rx_desc->nbuf);
-					err_list_tail = rx_desc->nbuf;
-				}
+			dp_rx_err_handler_rh(soc, rx_desc, error_code);
 
-				if (err_list_tail != err_list_head) {
-					dp_rx_err("Dropping scattered MSDU");
-					qdf_nbuf_list_free(err_list_head);
-					err_list_head = NULL;
-					err_list_tail = NULL;
-				} else {
-					dp_rx_err_handler_rh(soc, rx_desc,
-							     error_code);
-				}
-			}
 		} else {
 			DP_RX_PROCESS_NBUF(soc, nbuf_head, nbuf_tail, ebuf_head,
 					   ebuf_tail, rx_desc);
@@ -980,11 +942,7 @@ dp_rx_data_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 		msg_word += HTT_RX_DATA_MSDU_INFO_SIZE >> 2;
 	}
 
-	/* last msdu is not received for the scattered buffer */
-	if (err_list_head) {
-		qdf_assert_always(0);
-		qdf_nbuf_list_free(err_list_head);
-	}
+	dp_rx_per_core_stats_update(soc, rx_ctx_id, num_rx_bufs_reaped);
 
 	for (mac_id = 0; mac_id < MAX_PDEV_CNT; mac_id++) {
 		/*
@@ -1390,7 +1348,7 @@ QDF_STATUS dp_rx_defrag_store_fragment_rh(struct dp_soc *soc, qdf_nbuf_t frag)
 	/* Check if the packet is from a valid peer */
 	peer_id = QDF_NBUF_CB_RX_PEER_ID(frag);
 	txrx_peer = dp_txrx_peer_get_ref_by_id(soc, peer_id, &txrx_ref_handle,
-					       DP_MOD_ID_RX_ERR);
+					       DP_MOD_ID_RX);
 
 	if (!txrx_peer) {
 		/* We should not receive anything from unknown peer
@@ -1583,27 +1541,14 @@ dp_rx_frag_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 	uint32_t rx_buf_cookie;
 	struct dp_rx_desc *rx_desc;
 	uint8_t mac_id = 0;
-	uint8_t msdu_cnt;
 
 	qdf_assert(soc);
 
 	data_ind_msg = qdf_nbuf_data(data_ind);
 	msg_word =
 		(uint32_t *)(data_ind_msg + HTT_RX_DATA_IND_HDR_SIZE);
-	msdu_cnt =
-		 HTT_RX_DATA_IND_MSDU_CNT_GET(*((uint32_t *)data_ind_msg + 1));
 	rx_ctx_id =
 		dp_rx_get_ctx_id_frm_napiid(QDF_NBUF_CB_RX_CTX_ID(data_ind));
-
-	dp_rx_per_core_stats_update(soc, rx_ctx_id, msdu_cnt);
-
-	/* expecting one frag msdu info per RX DATA INDI */
-	if (msdu_cnt > 1) {
-		dp_err("received msdu_cnt %d from frag ind", msdu_cnt);
-		DP_STATS_INC(soc, rx.rx_frag_drop_cnt, msdu_cnt);
-		qdf_assert_always(0);
-		return;
-	}
 
 	rx_buf_cookie =
 		HTT_RX_DATA_MSDU_INFO_SW_BUFFER_COOKIE_GET(*(msg_word + 1));
@@ -1611,38 +1556,14 @@ dp_rx_frag_indication_handler(struct dp_soc *soc, qdf_nbuf_t data_ind,
 	if (qdf_unlikely(!rx_desc && !rx_desc->nbuf &&
 			 !rx_desc->in_use)) {
 		dp_rx_err("Invalid RX descriptor");
-		DP_STATS_INC(soc, rx.err.invalid_cookie, 1);
-		qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-				   QDF_TRACE_LEVEL_FATAL, msg_word,
-				   HTT_RX_DATA_MSDU_INFO_SIZE);
 		qdf_assert_always(0);
-		return;
 		/* TODO handle this if its valid case */
-	}
-
-	status = dp_rx_desc_nbuf_sanity_check_rh(soc, msg_word,
-						 rx_desc);
-	if (qdf_unlikely(QDF_IS_STATUS_ERROR(status))) {
-		DP_STATS_INC(soc, rx.err.nbuf_sanity_fail, 1);
-		dp_info_rl("Nbuf sanity check failure!");
-		dp_rx_dump_info_and_assert_rh(soc, msg_word, rx_desc);
-		rx_desc->in_err_state = 1;
-		qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-				   QDF_TRACE_LEVEL_FATAL, msg_word,
-				   HTT_RX_DATA_MSDU_INFO_SIZE);
-		qdf_assert_always(0);
-		return;
 	}
 
 	if (qdf_unlikely(!dp_rx_desc_check_magic(rx_desc))) {
 		dp_err("Invalid rx_desc cookie=%d", rx_buf_cookie);
 		DP_STATS_INC(soc, rx.err.rx_desc_invalid_magic, 1);
-		dp_rx_dump_info_and_assert_rh(soc, msg_word, rx_desc);
-		qdf_trace_hex_dump(QDF_MODULE_ID_TXRX,
-				   QDF_TRACE_LEVEL_FATAL, msg_word,
-				   HTT_RX_DATA_MSDU_INFO_SIZE);
 		qdf_assert(0);
-		return;
 	}
 
 	nbuf = rx_desc->nbuf;

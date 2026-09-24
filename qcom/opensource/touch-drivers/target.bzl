@@ -1,6 +1,202 @@
 load(":touch_modules.bzl", "touch_driver_modules")
 load(":touch_modules_build.bzl", "define_target_variant_modules")
-load("//msm-kernel:target_variants.bzl", "get_all_la_variants", "get_all_le_variants", "get_all_lxc_variants")
+load(":target_variants.bzl", "get_all_variants")
+
+def define_vienna(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+	        "glink_comm",
+            "raydium_ts",
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_VIENNA",
+            "CONFIG_MSM_TOUCH",
+            "CONFIG_TOUCHSCREEN_RM_TS",
+            "CONFIG_TOUCHSCREEN_MSM_GLINK"
+        ],
+)
+
+def define_sun(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "atmel_mxt_ts",
+            "dummy_ts",
+            "goodix_ts",
+            "st_fts",
+            "focaltech_fts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_SUN",
+            "CONFIG_MSM_TOUCH",
+            "CONFIG_TOUCHSCREEN_GOODIX_BRL",
+            "CONFIG_TOUCHSCREEN_ATMEL_MXT",
+            "CONFIG_TOUCHSCREEN_ST",
+            "CONFIG_TOUCH_FOCALTECH",
+            "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_DUMMY"
+        ],
+)
+
+def define_sunvm(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "goodix_ts",
+            "st_fts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_SUN",
+        ],
+        vm_target = True,
+)
+
+def define_alor_le(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "atmel_mxt_ts",
+            "dummy_ts",
+            "goodix_ts",
+            "st_fts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_ALOR",
+            "CONFIG_MSM_TOUCH",
+            "CONFIG_TOUCHSCREEN_GOODIX_BRL",
+            "CONFIG_TOUCHSCREEN_ATMEL_MXT",
+            "CONFIG_TOUCHSCREEN_ST",
+            "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_DUMMY"
+        ],
+)
+
+def define_canoevm(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "goodix_ts",
+            "st_fts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_CANOE",
+        ],
+        vm_target = True,
+)
+
+def define_canoe(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "atmel_mxt_ts",
+            "dummy_ts",
+            "focaltech_fts",
+            "goodix_ts",
+            "st_fts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_CANOE",
+            "CONFIG_TOUCH_FOCALTECH",
+            "CONFIG_MSM_TOUCH",
+            "CONFIG_TOUCHSCREEN_GOODIX_BRL",
+            "CONFIG_TOUCHSCREEN_ATMEL_MXT",
+            "CONFIG_TOUCHSCREEN_ST",
+            "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_DUMMY"
+        ],
+)
+
+def define_art(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "atmel_mxt_ts",
+            "dummy_ts",
+            "goodix_ts",
+            "st_fts",
+            "synaptics_tcm2_ts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_ART",
+            "CONFIG_MSM_TOUCH",
+            "CONFIG_TOUCHSCREEN_GOODIX_BRL",
+            "CONFIG_TOUCHSCREEN_ATMEL_MXT",
+            "CONFIG_TOUCHSCREEN_ST",
+            "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_SYNAPTICS_TCM2",
+            "CONFIG_TOUCHSCREEN_DUMMY"
+        ],
+)
+
+def define_artvm(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "goodix_ts",
+            "st_fts",
+            "focaltech_fts",
+            "synaptics_tcm2_ts",
+            "qts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_ART",
+        ],
+        vm_target = True,
+)
+
+def define_bengal(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "synaptics_tcm_ts",
+            "nt36xxx-i2c",
+            "qts"
+
+
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_MSM_TOUCH",
+            "CONFIG_ARCH_BENGAL",
+            "CONFIG_TOUCHSCREEN_SYNAPTICS_TCM",
+            "CONFIG_TOUCHSCREEN_NT36XXX_I2C",
+            "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_DUMMY"
+        ],
+)
 
 def define_pineapple(t,v):
     define_target_variant_modules(
@@ -8,26 +204,59 @@ def define_pineapple(t,v):
         variant = v,
         registry = touch_driver_modules,
         modules = [
-            "nt36xxx-i2c",
             "atmel_mxt_ts",
             "dummy_ts",
             "goodix_ts",
-            "focaltech_fts",
-	    "qts",
-            "eswin_ts"
+            "qts"
         ],
         config_options = [
             "TOUCH_DLKM_ENABLE",
             "CONFIG_ARCH_PINEAPPLE",
             "CONFIG_MSM_TOUCH",
             "CONFIG_TOUCHSCREEN_GOODIX_BRL",
-            "CONFIG_TOUCHSCREEN_NT36XXX_I2C",
             "CONFIG_TOUCHSCREEN_ATMEL_MXT",
             "CONFIG_TOUCHSCREEN_DUMMY",
-            "CONFIG_TOUCH_FOCALTECH",
-	    "CONFIG_QTS_ENABLE",
-            "CONFIG_TOUCHSCREEN_EPHTouch"
+            "CONFIG_QTS_ENABLE"
         ],
+)
+
+def define_malabarvm(t,v):
+    define_target_variant_modules(
+	target = t,
+	variant = v,
+	registry = touch_driver_modules,
+	modules = [
+	    "focaltech_fts",
+	    "goodix_ts",
+	    "qts"
+	],
+	config_options = [
+	    "TOUCH_DLKM_ENABLE",
+	    "CONFIG_ARCH_MALABAR",
+	],
+        vm_target = True,
+)
+
+def define_malabar(t,v):
+    define_target_variant_modules(
+	target = t,
+	variant = v,
+	registry = touch_driver_modules,
+	modules = [
+	    "focaltech_fts",
+            "dummy_ts",
+	    "goodix_ts",
+	    "qts"
+	],
+	config_options = [
+	    "TOUCH_DLKM_ENABLE",
+	    "CONFIG_ARCH_MALABAR",
+	    "CONFIG_MSM_TOUCH",
+	    "CONFIG_TOUCH_FOCALTECH",
+	    "CONFIG_TOUCHSCREEN_GOODIX_BRL",
+	    "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_DUMMY"
+	],
 )
 
 def define_blair(t,v):
@@ -39,8 +268,7 @@ def define_blair(t,v):
             "nt36xxx-i2c",
             "goodix_ts",
             "focaltech_fts",
-            "synaptics_tcm_ts",
-            "qts"
+            "synaptics_tcm_ts"
         ],
         config_options = [
             "TOUCH_DLKM_ENABLE",
@@ -49,28 +277,52 @@ def define_blair(t,v):
             "CONFIG_TOUCHSCREEN_NT36XXX_I2C",
             "CONFIG_TOUCHSCREEN_GOODIX_BRL",
             "CONFIG_TOUCH_FOCALTECH",
-            "CONFIG_TOUCHSCREEN_SYNAPTICS_TCM",
-            "CONFIG_QTS_ENABLE"
+            "CONFIG_TOUCHSCREEN_SYNAPTICS_TCM"
         ],
 )
 
-def define_pitti(t,v):
-     define_target_variant_modules(
+def define_parrot(t,v):
+    define_target_variant_modules(
         target = t,
         variant = v,
         registry = touch_driver_modules,
         modules = [
-            "focaltech_fts",
-            "goodix_ts",
-            "qts"
+            "nt36xxx-i2c",
+	    "goodix_ts",
+	    "qts",
+	    "focaltech_fts",
+	    "st_fts"
         ],
         config_options = [
             "TOUCH_DLKM_ENABLE",
-            "CONFIG_ARCH_PITTI",
+            "CONFIG_ARCH_PARROT",
+	    "CONFIG_ARCH_RAVELIN",
             "CONFIG_MSM_TOUCH",
-            "CONFIG_TOUCH_FOCALTECH",
-            "CONFIG_TOUCHSCREEN_GOODIX_BRL",
-            "CONFIG_QTS_ENABLE"
+            "CONFIG_TOUCHSCREEN_NT36XXX_I2C",
+	    "CONFIG_TOUCHSCREEN_GOODIX_BRL",
+	    "CONFIG_QTS_ENABLE",
+	    "CONFIG_TOUCH_FOCALTECH",
+	    "CONFIG_TOUCHSCREEN_ST"
+        ],
+)
+
+def define_lahaina(t,v):
+    define_target_variant_modules(
+        target = t,
+        variant = v,
+        registry = touch_driver_modules,
+        modules = [
+            "nt36xxx-i2c",
+	    "qts",
+	    "focaltech_fts"
+        ],
+        config_options = [
+            "TOUCH_DLKM_ENABLE",
+            "CONFIG_ARCH_LAHAINA",
+            "CONFIG_MSM_TOUCH",
+	    "CONFIG_QTS_ENABLE",
+            "CONFIG_TOUCHSCREEN_NT36XXX_I2C",
+	    "CONFIG_TOUCH_FOCALTECH",
         ],
 )
 
@@ -80,7 +332,7 @@ def define_monaco(t,v):
         variant = v,
         registry = touch_driver_modules,
         modules = [
-	    "glink_comm",
+            "glink_comm",
             "pt_ts",
             "pt_i2c",
             "pt_device_access",
@@ -91,7 +343,6 @@ def define_monaco(t,v):
             "TOUCH_DLKM_ENABLE",
             "CONFIG_ARCH_MONACO",
             "CONFIG_MSM_TOUCH",
-	    "CONFIG_TOUCHSCREEN_MSM_GLINK",
             "CONFIG_TOUCHSCREEN_PARADE",
             "CONFIG_TOUCHSCREEN_PARADE_DEVICETREE_SUPPORT",
             "CONFIG_TOUCHSCREEN_PARADE_I2C",
@@ -100,61 +351,53 @@ def define_monaco(t,v):
             "CONFIG_TOUCHSCREEN_PARADE_PROXIMITY",
             "CONFIG_TOUCHSCREEN_PARADE_DEBUG_MDL",
             "CONFIG_TOUCHSCREEN_RM_TS",
+            "CONFIG_TOUCHSCREEN_MSM_GLINK"
         ],
 )
-
-def define_volcano(t,v):
-     define_target_variant_modules(
-        target = t,
-        variant = v,
-        registry = touch_driver_modules,
-        modules = [
-            "goodix_ts",
-            "focaltech_fts",
-	    "qts",
-            "eswin_ts",
-        ],
-        config_options = [
-            "TOUCH_DLKM_ENABLE",
-            "CONFIG_ARCH_VOLCANO",
-            "CONFIG_MSM_TOUCH",
-            "CONFIG_TOUCHSCREEN_GOODIX_BRL",
-            "CONFIG_TOUCH_FOCALTECH",
-	    "CONFIG_QTS_ENABLE",
-            "CONFIG_TOUCHSCREEN_EPHTouch"
-        ],
-)
-
-def define_khaje(t,v):
-     define_target_variant_modules(
-        target = t,
-        variant = v,
-        registry = touch_driver_modules,
-        modules = [
-            "focaltech_fts",
-	        "qts"
-        ],
-        config_options = [
-            "TOUCH_DLKM_ENABLE",
-            "CONFIG_ARCH_KHAJE",
-            "CONFIG_MSM_TOUCH",
-            "CONFIG_TOUCH_FOCALTECH",
-	        "CONFIG_QTS_ENABLE"
-        ],
-)
-
 
 def define_touch_target():
-    for (t, v) in get_all_la_variants() + get_all_le_variants() + get_all_lxc_variants():
+    for (t, v) in get_all_variants():
         if t == "blair":
             define_blair(t, v)
-        elif t == "pitti":
-            define_pitti(t, v)
+        elif t == "pineapple":
+            define_pineapple(t, v)
+        elif t == "parrot":
+            define_parrot(t, v)
+        elif t == "malabar":
+            define_malabar(t, v)
+        elif t == "lahaina":
+            define_lahaina(t, v)
         elif t == "monaco":
             define_monaco(t, v)
-        elif t == "volcano":
-            define_volcano(t, v)
-        elif t == "khaje":
-            define_khaje(t, v)
+        elif t == "sun-tuivm":
+            define_sunvm(t, v)
+        elif t == "sun-oemvm":
+            define_sunvm(t, v)
+        elif t == "canoe":
+            define_canoe(t, v)
+        elif t == "alor-le":
+            define_alor_le(t, v)
+        elif t == "bengal":
+            define_bengal(t, v)
+        elif t == "canoe-tuivm":
+            define_canoevm(t, v)
+        elif t == "canoe-oemvm":
+            define_canoevm(t, v)
+        elif t == "malabar-tuivm":
+            define_malabarvm(t, v)
+        elif t == "malabar-oemvm":
+            define_malabarvm(t, v)
+        elif t == "sun":
+            define_sun(t, v)
+        elif t == "vienna":
+            define_vienna(t, v)
+        elif t == "art":
+            define_art(t, v)
+        elif t == "art-tuivm":
+            define_artvm(t, v)
+        elif t == "art-oemvm":
+            define_artvm(t, v)
+        elif t == "art16k":
+            define_art(t, v)
         else:
-            define_pineapple(t, v)
+            pass

@@ -799,10 +799,10 @@ static void nvt_parse_dt(struct device *dev)
 	struct device_node *np = dev->of_node;
 
 #if NVT_TOUCH_SUPPORT_HW_RST
-	ts->reset_gpio = of_get_named_gpio_flags(np, "novatek,reset-gpio", 0, &ts->reset_flags);
+	ts->reset_gpio = of_get_named_gpio(np, "novatek,reset-gpio", 0);
 	NVT_LOG("novatek,reset-gpio=%d\n", ts->reset_gpio);
 #endif
-	ts->irq_gpio = of_get_named_gpio_flags(np, "novatek,irq-gpio", 0, &ts->irq_flags);
+	ts->irq_gpio = of_get_named_gpio(np, "novatek,irq-gpio", 0);
 	NVT_LOG("novatek,irq-gpio=%d\n", ts->irq_gpio);
 
 }
@@ -1115,14 +1115,14 @@ void nvt_stop_crc_reboot(void)
 			msleep(1);
 
 			//---clear CRC_ERR_FLAG---
-			nvt_set_page(I2C_BLDR_Address, 0x3F135);
+			nvt_set_page(I2C_BLDR_Address, 0x3f12a);
 
 			buf[0] = 0x35;
 			buf[1] = 0xA5;
 			CTP_I2C_WRITE(ts->client, I2C_BLDR_Address, buf, 2);
 
 			//---check CRC_ERR_FLAG---
-			nvt_set_page(I2C_BLDR_Address, 0x3F135);
+			nvt_set_page(I2C_BLDR_Address, 0x3f12a);
 
 			buf[0] = 0x35;
 			buf[1] = 0x00;
@@ -1561,10 +1561,9 @@ static int nvt_ts_late_init(void)
  * return:
  *     Executive outcomes. 0---succeed. negative---failed
  *******************************************************/
-static int32_t nvt_ts_probe(struct i2c_client *client,
-	const struct i2c_device_id *id)
+static int nvt_ts_probe(struct i2c_client *client)
 {
-	int32_t ret = 0;
+	int ret = 0;
 #if defined(CONFIG_DRM)
 	struct device_node *dp = client->dev.of_node;
 #endif
@@ -1601,8 +1600,6 @@ static int32_t nvt_ts_probe(struct i2c_client *client,
 
 	mutex_init(&ts->lock);
 	mutex_init(&ts->xbuf_lock);
-
-	ts->id = id;
 
 #if defined(CONFIG_DRM)
 	nvt_i2c_register_for_panel_events(client->dev.of_node, ts);
@@ -3119,10 +3116,10 @@ static int32_t nvt_spi_parse_dt(struct device *dev)
 	struct nvt_spi_data_t *ts = nvt_spi_data;
 
 #if NVT_SPI_TOUCH_SUPPORT_HW_RST
-	ts->reset_gpio = of_get_named_gpio_flags(np, "novatek,reset-gpio", 0, &ts->reset_flags);
+	ts->reset_gpio = of_get_named_gpio(np, "novatek,reset-gpio", 0);
 	NVT_LOG("novatek,reset-gpio=%d\n", ts->reset_gpio);
 #endif
-	ts->irq_gpio = of_get_named_gpio_flags(np, "novatek,irq-gpio", 0, &ts->irq_flags);
+	ts->irq_gpio = of_get_named_gpio(np, "novatek,irq-gpio", 0);
 	NVT_LOG("novatek,irq-gpio=%d\n", ts->irq_gpio);
 
 	ts->pen_support = of_property_read_bool(np, "novatek,pen-support");
@@ -3818,9 +3815,9 @@ err_flash_proc_init_failed:
  *	Executive outcomes. 0---succeed. negative---failed
  ******************************************************
  */
-static int32_t nvt_spi_probe(struct spi_device *client)
+static int nvt_spi_probe(struct spi_device *client)
 {
-	int32_t ret = 0;
+	int ret = 0;
 #if defined(CONFIG_DRM)
 	struct device_node *dp = NULL;
 #endif

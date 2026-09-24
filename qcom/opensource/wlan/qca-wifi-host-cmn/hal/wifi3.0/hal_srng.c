@@ -65,11 +65,8 @@ void hal_qca5018_attach(struct hal_soc *hal);
 #ifdef QCA_WIFI_QCA5332
 void hal_qca5332_attach(struct hal_soc *hal);
 #endif
-#ifdef INCLUDE_HAL_KIWI
+#ifdef QCA_WIFI_KIWI
 void hal_kiwi_attach(struct hal_soc *hal);
-#endif
-#ifdef INCLUDE_HAL_PEACH
-void hal_peach_attach(struct hal_soc *hal);
 #endif
 
 #ifdef ENABLE_VERBOSE_DEBUG
@@ -446,17 +443,12 @@ static void hal_target_based_configure(struct hal_soc *hal)
 			hal_qca6750_attach(hal);
 		break;
 #endif
-#ifdef INCLUDE_HAL_KIWI
+#ifdef QCA_WIFI_KIWI
 	case TARGET_TYPE_KIWI:
 	case TARGET_TYPE_MANGO:
-		hal->use_register_windowing = true;
-		hal_kiwi_attach(hal);
-		break;
-#endif
-#ifdef INCLUDE_HAL_PEACH
 	case TARGET_TYPE_PEACH:
 		hal->use_register_windowing = true;
-		hal_peach_attach(hal);
+		hal_kiwi_attach(hal);
 		break;
 #endif
 #if defined(QCA_WIFI_QCA8074) && defined(WIFI_TARGET_TYPE_3_0)
@@ -914,7 +906,6 @@ static void hal_reg_write_work(void *arg)
 		if (!q_elem->valid)
 			break;
 
-		qdf_rmb();
 		/* buy some more time to make sure all fields
 		 * in q_elem is updated per different CPUs, in
 		 * case wmb/rmb is not taken effect
@@ -1045,7 +1036,6 @@ static void hal_reg_write_enqueue(struct hal_soc *hal_soc,
 	 */
 	qdf_wmb();
 	q_elem->valid = true;
-
 	/*
 	 * After all other fields in the q_elem has been updated
 	 * in memory successfully, the valid flag needs to be updated
@@ -1209,16 +1199,13 @@ void hal_delayed_reg_write(struct hal_soc *hal_soc,
 			   uint32_t value)
 {
 	if (hal_is_reg_write_tput_level_high(hal_soc) ||
-	    pld_is_device_awake(hal_soc->qdf_dev->dev) ||
-	    hal_srng_is_delay_reg_force_write(srng)) {
-		hal_srng_delay_reg_record_direct_write(srng, true);
+	    pld_is_device_awake(hal_soc->qdf_dev->dev)) {
 		qdf_atomic_inc(&hal_soc->stats.wstats.direct);
 		srng->wstats.direct++;
 		hal_write_address_32_mb(hal_soc, addr, value, false);
 		hal_srng_update_last_hptp(srng);
 		hal_srng_reg_his_add(srng, value);
 	} else {
-		hal_srng_delay_reg_record_direct_write(srng, false);
 		hal_reg_write_enqueue(hal_soc, srng, addr, value);
 	}
 

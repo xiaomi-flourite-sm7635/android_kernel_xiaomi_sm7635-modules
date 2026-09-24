@@ -1,7 +1,9 @@
 load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
 load("//build/bazel_common_rules/dist:dist.bzl", "copy_to_dist_dir")
-load("//msm-kernel:target_variants.bzl", "get_all_variants")
+load("//msm-kernel:target_variants.bzl", "get_all_variants", "get_arch_of_target")
+"""
 load("//msm-kernel:target_variants.bzl", "get_all_lunch_target_base_target_variants")
+"""
 
 def _define_module(target, variant, lunch_target=None):
     if lunch_target:
@@ -16,18 +18,19 @@ def _define_module(target, variant, lunch_target=None):
 
     deps = [
         ":camera_headers",
+        ":camera_banner",
         "//msm-kernel:all_headers",
         "//vendor/qcom/opensource/securemsm-kernel:smcinvoke_kernel_headers",
         "//vendor/qcom/opensource/securemsm-kernel:smmu_proxy_headers",
-        "//vendor/qcom/opensource/securemsm-kernel:{}_smcinvoke_dlkm".format(tv),
-        "//vendor/qcom/opensource/securemsm-kernel:{}_smmu_proxy_dlkm".format(tv),
-        "//vendor/qcom/opensource/mmrm-driver:{}_mmrm_driver".format(tv),
     ]
 
-    if target in ["pineapple", "fps"]:
+    if target == "pineapple":
         deps.extend([
             "//vendor/qcom/opensource/synx-kernel:synx_headers",
             "//vendor/qcom/opensource/synx-kernel:{}_modules".format(tv),
+            "//vendor/qcom/opensource/securemsm-kernel:{}_smcinvoke_dlkm".format(tv),
+            "//vendor/qcom/opensource/mmrm-driver:{}_mmrm_driver".format(tv),
+            "//vendor/qcom/opensource/securemsm-kernel:{}_smmu_proxy_dlkm".format(tv),
         ])
 
     ddk_module(
@@ -228,13 +231,10 @@ def _define_module(target, variant, lunch_target=None):
                     "drivers/cam_sensor_module/cam_flash/cam_flash_dev.c",
                     "drivers/cam_sensor_module/cam_flash/cam_flash_core.c",
                     "drivers/cam_sensor_module/cam_flash/cam_flash_soc.c",
+                    "drivers/cam_sensor_module/cam_aperture/cam_aperture_dev.c",
+                    "drivers/cam_sensor_module/cam_aperture/cam_aperture_core.c",
+                    "drivers/cam_sensor_module/cam_aperture/cam_aperture_soc.c",
                     "drivers/cam_sensor_module/cam_sensor_module_debug.c",
-                ],
-            },
-            "CONFIG_OIS_DW9784": {
-                True: [
-                    
-                    "drivers/cam_sensor_module/cam_ois/dw9784_ois.c",
                 ],
             },
             "CONFIG_SPECTRA_CUSTOM": {
@@ -265,7 +265,7 @@ def _define_module(target, variant, lunch_target=None):
             },
         },
 
-        copts = ["-Wno-implicit-fallthrough"],
+        copts = ["-Wno-implicit-fallthrough", "-include", "$(location :camera_banner)"],
 
         deps = deps,
         kconfig = "Kconfig",
@@ -291,7 +291,21 @@ def _define_module(target, variant, lunch_target=None):
     )
 
 def define_camera_module():
+    skip = "false"
+
     for (t, v) in get_all_variants():
-        _define_module(t, v)
+        if get_arch_of_target(t) == "pineapple":
+            skip = "true"
+        else:
+            if (t != "autoghgvm"):
+                _define_module(t, v)
+
+    if skip == "true":
+        _define_module("pineapple", "gki")
+        _define_module("pineapple", "consolidate")
+"""
     for (lt, bt, v) in get_all_lunch_target_base_target_variants():
         _define_module(bt, v, lt)
+"""
+
+

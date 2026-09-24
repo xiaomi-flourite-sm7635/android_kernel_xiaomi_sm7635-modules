@@ -13,6 +13,7 @@
  * TC3XXX
  *
  * Copyright (C) 2015-2020 Parade Technologies
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -58,7 +59,12 @@
 #include <drm/drm_panel.h>
 #endif
 
+#include <linux/version.h>
+#if (KERNEL_VERSION(6, 12, 0) > LINUX_VERSION_CODE)
 #include <asm/unaligned.h>
+#else
+#include <linux/unaligned.h>
+#endif
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/err.h>
@@ -90,6 +96,7 @@
 #include <linux/timex.h>
 #include <linux/rtc.h>
 #include <linux/regulator/consumer.h>
+#include <linux/pinctrl/consumer.h>
 
 #define STATUS_SUCCESS   0
 #define STATUS_FAIL     -1
@@ -1596,8 +1603,6 @@ struct pt_core_data {
 	bool quick_boot;
 	bool drv_debug_suspend;
 	bool touch_offload;
-	bool vdd_is_enabled;
-	bool vcc_i2c_is_enabled;
 };
 
 struct gd_sensor {

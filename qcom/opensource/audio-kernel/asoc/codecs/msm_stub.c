@@ -13,7 +13,6 @@
 
 #define DRV_NAME "msm-stub-codec"
 
-/* A dummy driver useful only to advertise hardware parameters */
 static struct snd_soc_dai_driver msm_stub_dais[] = {
 	{
 		.name = "msm-stub-rx",
@@ -21,7 +20,7 @@ static struct snd_soc_dai_driver msm_stub_dais[] = {
 			.stream_name = "Playback",
 			.channels_min = 1,
 			.channels_max = 32,
-			.rates = SNDRV_PCM_RATE_8000_96000,
+			.rates = SNDRV_PCM_RATE_8000_48000,
 			.formats = (SNDRV_PCM_FMTBIT_S16_LE |
 				    SNDRV_PCM_FMTBIT_S24_LE |
 				    SNDRV_PCM_FMTBIT_S24_3LE |
@@ -34,7 +33,7 @@ static struct snd_soc_dai_driver msm_stub_dais[] = {
 			.stream_name = "Record",
 			.channels_min = 1,
 			.channels_max = 32,
-			.rates = SNDRV_PCM_RATE_8000_96000,
+			.rates = SNDRV_PCM_RATE_8000_48000,
 			.formats = (SNDRV_PCM_FMTBIT_S16_LE |
 				    SNDRV_PCM_FMTBIT_S24_LE |
 				    SNDRV_PCM_FMTBIT_S24_3LE |

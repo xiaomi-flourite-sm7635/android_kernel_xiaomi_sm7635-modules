@@ -1,3 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ */
+
 #define CONFIG_TOUCHSCREEN_PARADE 1
 #define CONFIG_TOUCHSCREEN_PARADE_DEVICETREE_SUPPORT 1
 #define CONFIG_TOUCHSCREEN_PARADE_I2C 1

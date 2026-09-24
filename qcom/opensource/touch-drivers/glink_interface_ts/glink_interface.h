@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef GLINKINTERFACE_H
@@ -26,14 +26,14 @@
 #define TIMEOUT_MS 2000
 
 struct glink_touch_priv {
- 	void *handle;
- 	struct mutex glink_mutex;
- 	struct mutex touch_state_mutex;
- 	void *lhndl;
- 	char rx_buf[TOUCH_GLINK_INTENT_SIZE];
- 	bool glink_touch_cmplt;
+	void *handle;
+	struct mutex glink_mutex;
+	struct mutex touch_state_mutex;
+	void *lhndl;
+	char rx_buf[TOUCH_GLINK_INTENT_SIZE];
+	bool glink_touch_cmplt;
 	wait_queue_head_t link_state_wait;
- 	bool msm_touch_rpmsg;
+	bool msm_touch_rpmsg;
 };
 
 static void *glink_touch_drv;
@@ -60,15 +60,8 @@ struct touch_channel_ops {
 
 void glink_touch_channel_init(void (*fn1)(bool), void (*fn2)(void *, int));
 
-
-
-#if IS_ENABLED(CONFIG_MSM_SLATERSB_RPMSG)
 int glink_touch_tx_msg(void  *msg, size_t len);
-#else
-static inline int glink_touch_tx_msg(void  *msg, size_t len)
-{
-	return -EIO;
-}
-#endif
+
+int glink_touch_tx_msg(void  *msg, size_t len);
 
 #endif

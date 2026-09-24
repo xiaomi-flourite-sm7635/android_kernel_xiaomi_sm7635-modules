@@ -20,9 +20,9 @@
 #define ICP_CLK_SVS_HZ           400000000
 
 #define CAM_ICP_BW_BYTES_VOTE    40000000
-
-#define CAM_ICP_CTX_MAX          54
-
+// xiaomi add begin
+#define CAM_ICP_CTX_MAX          128 //baseline 80
+// xiaomi add end
 #define CPAS_IPE1_BIT            0x2000
 
 #define CAM_IPE_DEFAULT_AXI_PATH    CAM_AXI_PATH_DATA_IPE_WR_VID

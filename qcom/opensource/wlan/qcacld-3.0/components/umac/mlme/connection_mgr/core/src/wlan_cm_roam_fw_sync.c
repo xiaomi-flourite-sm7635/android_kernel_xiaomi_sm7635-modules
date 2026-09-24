@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -50,7 +50,12 @@
 #include "wlan_mlo_link_force.h"
 #include <wlan_psoc_mlme_api.h>
 #include <wma.h>
-#include "wlan_twt_cfg_ext_api.h"
+
+#include "wlan_objmgr_vdev_obj.h"
+#include "utils_mlo.h"
+#include "wlan_dp_ucfg_api.h"
+#include "wlan_hdd_data_stall_detection.h"
+#include "wlan_policy_mgr_i.h"
 
 /*
  * cm_is_peer_preset_on_other_sta() - Check if peer exists on other STA
@@ -1410,7 +1415,9 @@ cm_disconnect_roam_invoke_fail(struct wlan_objmgr_vdev *vdev,
 	struct wlan_objmgr_psoc *psoc;
 	uint8_t vdev_id = wlan_vdev_get_id(vdev);
 	struct rso_config *rso_cfg;
-
+	struct policy_mgr_psoc_priv_obj *pm_ctx;
+	uint8_t sta_active_link_nums;
+  
 	psoc = wlan_vdev_get_psoc(vdev);
 	if (!psoc) {
 		mlme_err(CM_PREFIX_FMT "psoc not found",
@@ -1445,6 +1452,29 @@ cm_disconnect_roam_invoke_fail(struct wlan_objmgr_vdev *vdev,
 	 */
 	if (qdf_is_macaddr_broadcast(&rso_cfg->roam_invoke_bssid)) {
 		qdf_zero_macaddr(&rso_cfg->roam_invoke_bssid);
+		return status;
+	}
+
+	/**
+	 * If received nud_failed_event form kernel, and do not disconnect AP,
+	 * Send nud_failed_event to fwk, determine how to handle this event by fwk.
+	 */
+	pm_ctx = policy_mgr_get_context(psoc);
+	if (!pm_ctx) {
+		pe_err("Policy manager context is NULL");
+		sta_active_link_nums = 0;
+	} else {
+		sta_active_link_nums = pm_ctx->no_of_active_sessions[QDF_STA_MODE];
+	}
+	if(ucfg_dp_is_nud_failure_event_notify(psoc) &&
+		sta_active_link_nums == 1 &&
+		(rso_cfg->roam_invoke_source == CM_ROAMING_NUD_FAILURE &&
+		(nud_disconnect || rso_cfg->is_forced_roaming))) {
+		rso_cfg->roam_invoke_source = CM_SOURCE_INVALID;
+		if (rso_cfg->is_forced_roaming)
+			rso_cfg->is_forced_roaming = false;
+		mlme_err("Occur nud failure and trigger roam fail, notify fail event but don't deauth");
+		hdd_data_stall_event_notify(WLAN_DBG_DATA_STALL_CONSECUTIVE_NUD_FAILURE);
 		return status;
 	}
 
@@ -1726,33 +1756,4 @@ QDF_STATUS wlan_cm_free_roam_synch_frame_ind(struct rso_config *rso_cfg)
 	}
 
 	return QDF_STATUS_SUCCESS;
-}
-
-void cm_update_ext_cap_ie_at_source(struct wlan_objmgr_psoc *psoc,
-				    struct element_info *assoc_ie)
-{
-	struct wmi_unified *wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
-	const uint8_t *ext_cap_ie;
-	struct s_ext_cap *extcap;
-	bool twt_requestor = false, twt_req_support = false;
-
-	if (!wmi_handle)
-		return;
-
-	if (!wmi_service_enabled(wmi_handle, wmi_service_infra_mbssid))
-		return;
-
-	ext_cap_ie  = wlan_get_ie_ptr_from_eid(WLAN_ELEMID_XCAPS,
-					       assoc_ie->ptr, assoc_ie->len);
-	if (!ext_cap_ie)
-		return;
-
-	extcap = (struct s_ext_cap *)&ext_cap_ie[2];
-	/* MBSSID */
-	extcap->multi_bssid = 1;
-	/* TWT requestor */
-	wlan_twt_get_requestor_cfg(psoc, &twt_requestor);
-	wlan_twt_cfg_get_req_flag(psoc, &twt_req_support);
-	extcap->twt_requestor_support = twt_requestor && twt_req_support;
-
 }

@@ -28,6 +28,10 @@
 #include <linux/soc/qcom/msm_mmrm.h>
 #endif
 
+/* xiaomi add for mipi phy backup setting begin*/
+#include "cam_context.h"
+/* xiaomi add for mipi phy backup setting end*/
+
 #define NO_SET_RATE  -1
 #define INIT_RATE    -2
 
@@ -316,6 +320,10 @@ struct cam_hw_soc_info {
 	int32_t                         cam_cx_ipeak_bit;
 
 	void                           *soc_private;
+
+	/* xiaomi add for mipi phy backup setting begin*/
+	uint8_t                        phy_cfg_current_index[CAM_PHY_MAX_CTRL_NO];
+	/* xiaomi add for mipi phy backup setting end*/
 };
 
 /**
@@ -642,6 +650,16 @@ int cam_soc_util_irq_enable(struct cam_hw_soc_info *soc_info);
 int cam_soc_util_irq_disable(struct cam_hw_soc_info *soc_info);
 
 /**
+ * cam_soc_util_get_regulator_enable()
+ *
+ * @brief:              Enable single regulator
+ *
+ * @rgltr               Regulator that needs to be turned ON
+ * @return:             Success or failure
+ */
+int cam_soc_util_get_regulator_enable(struct regulator *rgltr);
+
+/**
  * cam_soc_util_regulator_enable()
  *
  * @brief:              Enable single regulator
@@ -822,15 +840,13 @@ typedef int (*cam_soc_util_regspace_data_cb)(uint32_t reg_base_type,
  * @soc_dump_args:         Dump buffer args to dump the soc information.
  * @user_triggered_dump:   Flag to indicate if the dump request is issued by
  *                         user.
- * @cpu_addr:              cpu address of buffer
- * @size:                  size of buffer
  * @return:                Success or Failure
  */
 int cam_soc_util_reg_dump_to_cmd_buf(void *ctx,
 	struct cam_cmd_buf_desc *cmd_desc, uint64_t req_id,
 	cam_soc_util_regspace_data_cb reg_data_cb,
 	struct cam_hw_soc_dump_args *soc_dump_args,
-	bool user_triggered_dump, uintptr_t cpu_addr, size_t buf_size);
+	bool user_triggered_dump);
 
 /**
  * cam_soc_util_print_clk_freq()

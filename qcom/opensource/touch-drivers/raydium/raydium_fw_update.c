@@ -3,6 +3,7 @@
  * Raydium TouchScreen driver.
  *
  * Copyright (c) 2021  Raydium tech Ltd.
+ * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -60,7 +61,7 @@ static void raydium_cb(const struct firmware *fw, void *ctx)
 	int i32_ret = ERROR;
 #endif
 	if (fw && (fw->size == RAD_ALLFW_3X_SIZE)) {
-		LOGD(LOG_DEBUG, "[touch]get firmware success size:%x\n", fw->size);
+		LOGD(LOG_DEBUG, "[touch]get firmware success size:%zx\n", fw->size);
 
 		memcpy(g_rad_boot_image, fw->data, RAD_BOOT_3X_SIZE);
 		u32_offset += RAD_BOOT_3X_SIZE;
@@ -231,8 +232,8 @@ int wait_fw_state(struct i2c_client *client, unsigned int u32_addr,
 		  unsigned int u32_state, unsigned long u32_delay_us,
 		  unsigned short u16_retry)
 {
-	unsigned char u8_buf[4];
-	unsigned int u32_read_data;
+	unsigned char u8_buf[4] = {0};
+	unsigned int u32_read_data = 0;
 	unsigned int u32_min_delay_us = u32_delay_us - 500;
 	unsigned int u32_max_delay_us = u32_delay_us + 500;
 
@@ -482,7 +483,7 @@ exit_upgrate:
 unsigned char raydium_stop_mcu_3x(unsigned char u8_is_tp_reset)
 {
 	unsigned short u16_time_out = 100;
-	unsigned int u32_read_data;
+	unsigned int u32_read_data = 0;
 	unsigned int u32_write = 0;
 
 	if (u8_is_tp_reset) {
@@ -546,7 +547,7 @@ static int raydium_fw_upgrade_3X(struct i2c_client *client,
 				 unsigned char u8_check_crc)
 {
 	int i32_ret = 0;
-	unsigned char u8_buf[4];
+	unsigned char u8_buf[4] = {0};
 	unsigned short u16_retry = 1000;
 	unsigned int u32_write = 0;
 
@@ -853,7 +854,11 @@ static int raydium_boot_upgrade_3X(struct i2c_client *client, unsigned char u8_i
 		return ERROR;
 	/*WRT boot-loader to PRAM first*/
 	memset(u8_buf, 0, sizeof(u8_buf));
+#ifdef CONFIG_ARCH_VIENNA
+	u8_buf[0] = 0x1E;
+#else
 	u8_buf[0] = 0x1F;
+#endif
 	i32_ret = handle_i2c_pda_write(client, RAYDIUM_PDA_PRAMLOCK, u8_buf, 4);
 
 	/*Sending bootloader*/
@@ -895,8 +900,8 @@ exit_upgrade:
 int raydium_fw_update_check(unsigned int u32_check_version)
 {
 	int i32_ret = ERROR;
-	unsigned int u32_fw_version;
-	unsigned char u8_rbuffer[4];
+	unsigned int u32_fw_version = 0;
+	unsigned char u8_rbuffer[4] = {0};
 
 	if (g_raydium_ts->fw_version != u32_check_version) {
 
@@ -969,11 +974,11 @@ exit_upgrade:
 int raydium_fw_update_init(unsigned short u16_i2c_data)
 {
 
-	unsigned char u8_rbuffer[4];
+	unsigned char u8_rbuffer[4] = {0};
 
-	unsigned int u32_fw_version;
+	unsigned int u32_fw_version = 0;
 #if !ENABLE_FW_LOADER
-	unsigned int u32_image_version;
+	unsigned int u32_image_version = 0;
 #endif
 	int i32_ret = ERROR;
 

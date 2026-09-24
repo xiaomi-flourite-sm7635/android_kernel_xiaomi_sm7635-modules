@@ -1488,6 +1488,9 @@ struct hdd_adapter {
 	struct wlan_hdd_link_info *deflink;
 	struct wlan_hdd_link_info link_info[WLAN_MAX_ML_BSS_LINKS];
 	struct wlan_hdd_tx_power tx_power;
+#ifdef CFG_SUPPORT_SCAN_EXT_FLAG
+	uint8_t scan_ext_flag;
+#endif
 #ifdef WLAN_FEATURE_TX_LATENCY_STATS
 	struct cdp_tx_latency_config tx_latency_cfg;
 #endif
@@ -2841,18 +2844,15 @@ wlan_hdd_get_link_info_from_objmgr(struct wlan_objmgr_vdev *vdev);
 /**
  * hdd_adapter_disable_all_links() - Reset the links on stop adapter.
  * @adapter: HDD adapter
- * @clear_macaddr: Clears mac address if set to true
  *
  * Resets the MAC address in each link info and resets the link info
  * mapping in adapter array.
  *
  * Return: void
  */
-void
-hdd_adapter_disable_all_links(struct hdd_adapter *adapter, bool clear_macaddr);
+void hdd_adapter_disable_all_links(struct hdd_adapter *adapter);
 #else
-static inline void
-hdd_adapter_disable_all_links(struct hdd_adapter *adapter, bool clear_macaddr)
+static inline void hdd_adapter_disable_all_links(struct hdd_adapter *adapter)
 {
 }
 #endif
@@ -5557,6 +5557,11 @@ hdd_lpc_is_work_scheduled(struct hdd_context *hdd_ctx)
 }
 #endif
 
+#ifdef WLAN_FEATURE_OSRTP
+int hdd_bpf(struct net_device *dev, struct netdev_bpf *bpf);
+#endif
+
+
 /**
  * hdd_allow_new_intf() - Allow new intf created or not
  * @hdd_ctx: hdd context
@@ -5566,29 +5571,4 @@ hdd_lpc_is_work_scheduled(struct hdd_context *hdd_ctx)
  */
 bool hdd_allow_new_intf(struct hdd_context *hdd_ctx,
 			enum QDF_OPMODE mode);
-
-#ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
-/**
- * wlan_hdd_is_link_switch_in_progress() - Function to check if there is any
- * link switch in progress
- * @link_info: Link info pointer in HDD adapter
- *
- * Return: true if link switch in progress, false otherwise
- */
-bool wlan_hdd_is_link_switch_in_progress(struct wlan_hdd_link_info *link_info);
-#else
-static inline bool
-wlan_hdd_is_link_switch_in_progress(struct wlan_hdd_link_info *link_info)
-{
-	return false;
-}
-#endif
-
-/**
- * wlan_hdd_is_mlo_connection() - Check if connection is legacy or mlo
- * @link_info: Link info pointer in HDD adapter
- *
- * Return: True if MLO connection, else False
- */
-bool wlan_hdd_is_mlo_connection(struct wlan_hdd_link_info *link_info);
 #endif /* end #if !defined(WLAN_HDD_MAIN_H) */

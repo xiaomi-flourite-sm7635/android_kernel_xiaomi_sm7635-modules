@@ -18,6 +18,11 @@
  *  DOC: osif_dp_txrx.c
  *  This file contains DP component's TX/RX osif API implementation
  */
+#ifdef WLAN_FEATURE_OSRTP
+#include "mixdp.h"
+#include "xdp_sock_drv.h"
+#include "xsk_buff_pool.h"
+#endif
 #include "os_if_dp.h"
 #include "os_if_dp_lro.h"
 #include <wlan_dp_public_struct.h>
@@ -625,6 +630,27 @@ QDF_STATUS osif_dp_rx_pkt_to_nw(qdf_nbuf_t nbuf, enum dp_nbuf_push_type type)
 	return QDF_STATUS_E_FAILURE;
 }
 
+#ifdef WLAN_FEATURE_OSRTP
+static QDF_STATUS osif_dp_rx_osrtp_pkt_to_us(qdf_nbuf_t nbuf, struct xsk_buff_pool *xsk_pool)
+{
+	struct xdp_buff *xdp = NULL;
+
+	xdp = mi_xsk_buff_alloc(xsk_pool);
+	if (xdp) {
+		qdf_mem_copy(xdp->data, qdf_nbuf_data(nbuf), qdf_nbuf_len(nbuf));
+		xdp->data_end = xdp->data + qdf_nbuf_len(nbuf);
+
+		if (qdf_unlikely(mi_xdp_do_redirect(xdp))) {
+			mi_xsk_buff_free(xdp);
+		}
+	}
+
+	qdf_nbuf_dev_kfree(nbuf);
+
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 void os_if_dp_register_txrx_callbacks(struct wlan_dp_psoc_callbacks *cb_obj)
 {
 	cb_obj->dp_nbuf_push_pkt = osif_dp_rx_pkt_to_nw;
@@ -640,4 +666,8 @@ void os_if_dp_register_txrx_callbacks(struct wlan_dp_psoc_callbacks *cb_obj)
 	osif_dp_register_arp_unsolicited_cbk(cb_obj);
 
 	osif_dp_register_send_rx_pkt_over_nl(cb_obj);
+
+#ifdef WLAN_FEATURE_OSRTP
+	cb_obj->dp_rx_osrtp_pkt = osif_dp_rx_osrtp_pkt_to_us;
+#endif
 }

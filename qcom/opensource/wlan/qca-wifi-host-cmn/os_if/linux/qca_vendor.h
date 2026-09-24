@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1121,6 +1121,11 @@ enum qca_nl80211_vendor_subcmds {
 	QCA_NL80211_VENDOR_SUBCMD_RECONFIG_REMOVE_COMPLETE_EVENT = 234,
 	QCA_NL80211_VENDOR_SUBCMD_REGULATORY_TPC_INFO = 237,
 	QCA_NL80211_VENDOR_SUBCMD_FW_PAGE_FAULT_REPORT = 238,
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+	QCA_NL80211_VENDOR_SUBCMD_ADD_SCAN_ENTRY = 240,
+#endif
+// END WIFI_P2pEnhance
 };
 
 enum qca_wlan_vendor_tos {
@@ -1517,10 +1522,6 @@ enum qca_wlan_auth_type {
  * type for remote channel width greater than 160 MHz.
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_EHT_OPERATION: Attribute type for
  * sending EHT operation info.
- * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_ASSOCIATED_BW: Attribute type of u32
- *  for sending the associated bandwidth.
- *  Example: The driver will send an enum value of type nl80211_chan_width,
- *  such as NL80211_CHAN_WIDTH_20_NOHT.
  * @QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_AFTER_LAST: After last
  *
  */
@@ -1567,7 +1568,6 @@ enum qca_wlan_vendor_attr_get_station_info {
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_HE_OPERATION,
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_REMOTE_CH_WIDTH_V2,
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_EHT_OPERATION,
-	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_ASSOCIATED_BW,
 
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_AFTER_LAST,
@@ -5928,28 +5928,12 @@ enum qca_wlan_vendor_attr_config {
 	 */
 	QCA_WLAN_VENDOR_ATTR_CONFIG_KEEP_ALIVE_INTERVAL = 108,
 
-	/* 8-bit unsigned value to configure reduced power scan mode.
-	 *
-	 * This attribute is used to configure the driver to optimize power
-	 * during scan. For e.g., the driver can switch to 1x1 from 2x2 mode
-	 * for additional power save.
-	 *
-	 * 1 - Enable reduced power scan mode.
-	 * 0 - Disable reduced power scan mode.
+	// MIUI ADD: WIFI_PowerSave
+	/* 8-bit unsigned value to set nss and ant mode.
+	 * 1-1x1, 2-2x2
 	 */
-	QCA_WLAN_VENDOR_ATTR_CONFIG_REDUCED_POWER_SCAN_MODE = 109,
-
-	/* 8-bit unsigned integer to configure the driver to follow AP's
-	 * preference values to select a roam candidate from BTM request.
-	 *
-	 * This attribute is used to configure the driver to select the roam
-	 * candidate based on AP advertised preference values. If not set,
-	 * the driver uses its internal scoring algorithm to do the same.
-	 *
-	 * 1 - STA follows AP's preference values to select a roam candidate
-	 * 0 - STA uses internal scoring algorithm to select a roam candidate
-	 */
-	QCA_WLAN_VENDOR_ATTR_CONFIG_FOLLOW_AP_PREFERENCE_FOR_CNDS_SELECT = 121,
+	QCA_WLAN_VENDOR_ATTR_CONFIG_SET_NSS_ANT = 200,
+	// END WIFI_PowerSave
 
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_CONFIG_AFTER_LAST,
@@ -9064,6 +9048,9 @@ enum qca_wlan_vendor_attr_spectral_scan_status {
  * @QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_ULTRALOW:
  *      Use ultra low latency level to benefit for gaming/voice
  *      application via constraint scan/roaming/adaptive PS.
+ * @QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_ULTRALOW_MLO_LINK_SWITCH:
+ *      Use ultra low latency level to control mlo link switch but
+ *      do not constraint scan/roaming/adaptive PS.
  */
 enum qca_wlan_vendor_attr_config_latency_level {
 	QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_INVALID = 0,
@@ -9074,6 +9061,7 @@ enum qca_wlan_vendor_attr_config_latency_level {
 	QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_XR,
 	QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_LOW = 3,
 	QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_ULTRALOW = 4,
+	QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_ULTRALOW_MLO_LINK_SWITCH = 5,
 
 	/* keep last */
 	QCA_WLAN_VENDOR_ATTR_CONFIG_LATENCY_LEVEL_AFTER_LAST,
@@ -16823,6 +16811,23 @@ enum qca_wlan_vendor_attr_mlo_link_state {
 };
 
 /**
+ * enum qca_wlan_vendor_fail_attr_roam - Defines the attributes used by the vendor
+ * command QCA_NL80211_VENDOR_SUBCMD_ROAM_EVENTS_INDEX.
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAM_TNTERACE: Wlan interace vdev_id
+ *
+ * @QCA_WLAN_VENDOR_ATTR_ROAM_FAIL_REASON: No find ap failed reason
+ */
+enum qca_wlan_vendor_fail_attr_roam {
+	QCA_WLAN_VENDOR_ATTR_ROAM_INVALID = 0,
+	QCA_WLAN_VENDOR_ATTR_ROAM_TNTERACE = 1,
+	QCA_WLAN_VENDOR_ATTR_ROAM_FAIL_REASON = 2,
+	/* Keep last */
+	QCA_WLAN_VENDOR_ATTR_ROAM_LAST,
+	QCA_WLAN_VENDOR_ATTR_ROAM_MAX =
+	QCA_WLAN_VENDOR_ATTR_ROAM_LAST - 1,
+};
+/**
  * enum qca_wlan_vendor_attr_tid_link_map_status - Definition of attributes used
  * inside nested attribute %QCA_WLAN_VENDOR_ATTR_TID_TO_LINK_MAP_STATUS.
  *
@@ -17580,4 +17585,30 @@ enum qca_wlan_btm_support {
 	QCA_WLAN_BTM_SUPPORT_DEFAULT = 0,
 	QCA_WLAN_BTM_SUPPORT_DISABLE = 1,
 };
+
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+/**
+ * enum qca_wlan_vendor_attr_scan_entry - Specifies vendor scan entry attributes
+ *
+ * @QCA_WLAN_VENDOR_ATTR_SCAN_FREQUENCIES: unsigned 32-bit attributes
+ *	with frequencies to be scanned (in MHz)
+ * @QCA_WLAN_VENDOR_ATTR_SCAN_SSID: Nested attribute with SSIDs to be scanned
+ *	rates to be included
+ * @QCA_WLAN_VENDOR_ATTR_SCAN_BSSID: 6-byte MAC address representing the
+ *	specific BSSID to scan for.
+ */
+enum qca_wlan_vendor_attr_scan_entry {
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_INVALID = 0,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_FREQUENCIES = 1,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_BANDWIDTH = 2,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_SSID = 3,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_BSSID = 4,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_IES = 5,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_AFTER_LAST,
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_MAX =
+	QCA_WLAN_VENDOR_ATTR_SCAN_ENTRY_AFTER_LAST - 1
+};
+#endif
+// END WIFI_P2pEnhance
 #endif

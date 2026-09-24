@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -17,6 +17,9 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
+#ifdef WLAN_FEATURE_OSRTP
+#include "xsk_buff_pool.h"
+#endif
 #include "hal_hw_headers.h"
 #include "dp_types.h"
 #include "dp_rx.h"
@@ -352,8 +355,6 @@ dp_pdev_nbuf_alloc_and_map_replenish(struct dp_soc *dp_soc,
 		DP_STATS_INC(dp_pdev, replenish.nbuf_alloc_fail, 1);
 		return QDF_STATUS_E_NOMEM;
 	}
-
-	DP_STATS_INC(dp_pdev, replenish.nbuf_alloc_succ, 1);
 
 	ret = dp_rx_buffer_pool_nbuf_map(dp_soc, rx_desc_pool,
 					 nbuf_frag_info_t);
@@ -3543,3 +3544,42 @@ bool dp_rx_multipass_process(struct dp_txrx_peer *txrx_peer, qdf_nbuf_t nbuf,
 	return true;
 }
 #endif /* QCA_MULTIPASS_SUPPORT */
+
+#ifdef WLAN_FEATURE_OSRTP
+bool dp_rx_osrtp_check(struct dp_soc *soc, qdf_nbuf_t nbuf,
+		struct xsk_buff_pool *xsk_pool, struct bpf_prog *prog)
+{
+	uint32_t res = 0;
+	struct xdp_buff xdp = {0};
+
+	if (!xsk_pool || !prog)
+		return false;
+
+	if (qdf_nbuf_is_nonlinear(nbuf))
+		return false;
+
+	xdp.data = qdf_nbuf_data(nbuf);
+	xdp.data_end = qdf_nbuf_data(nbuf) + qdf_nbuf_len(nbuf);
+
+	res = bpf_prog_run_xdp(prog, &xdp);
+
+	return (res == XDP_REDIRECT) ? true : false;
+}
+
+QDF_STATUS dp_rx_deliver_osrtp_to_stack(struct dp_soc *soc, struct dp_vdev *vdev, struct xsk_buff_pool *xsk_pool,
+				  qdf_nbuf_t nbuf_head, qdf_nbuf_t nbuf_tail)
+{
+	int num_nbuf = 0;
+
+	if (qdf_unlikely(!vdev || vdev->delete.pending) || !vdev->osif_rx_osrtp) {
+		num_nbuf = dp_rx_drop_nbuf_list(NULL, nbuf_head);
+		DP_STATS_INC(soc, rx.err.invalid_vdev, num_nbuf);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	vdev->osif_rx_osrtp(vdev->osif_vdev, xsk_pool, nbuf_head);
+
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+

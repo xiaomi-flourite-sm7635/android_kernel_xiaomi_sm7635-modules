@@ -60,7 +60,11 @@ extern "C" {
 
 #define       MAX_CHANNEL_LIST_LEN         256
 #ifndef QDF_MAX_NO_OF_SAP_MODE
+#ifndef QC_WIFI_VENDOR_AUTO
 #define       QDF_MAX_NO_OF_SAP_MODE       2    /* max # of SAP */
+#else
+#define       QDF_MAX_NO_OF_SAP_MODE       3
+#endif/*QC_WIFI_VENDOR_AUTO*/
 #endif
 #define       SAP_MAX_NUM_SESSION          5
 #define       SAP_MAX_OBSS_STA_CNT         1    /* max # of OBSS STA */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024, Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -61,6 +61,7 @@
 	dp_display_state_log("remove "#x); }
 
 #define MAX_TMDS_CLOCK_HDMI_1_4 340000
+#define MAX_TIMES_RECONNECT 4
 
 enum dp_display_states {
 	DP_STATE_DISCONNECTED           = 0,
@@ -76,6 +77,9 @@ enum dp_display_states {
 	DP_STATE_HDCP_ABORTED           = BIT(9),
 	DP_STATE_SRC_PWRDN              = BIT(10),
 	DP_STATE_TUI_ACTIVE             = BIT(11),
+#ifdef MI_DISPLAY_MODIFY
+	DP_STATE_PANEL_RECONNECT        = BIT(12),
+#endif
 };
 
 static char *dp_display_state_name(enum dp_display_states state)
@@ -132,6 +136,12 @@ static char *dp_display_state_name(enum dp_display_states state)
 	if (state & DP_STATE_TUI_ACTIVE)
 		len += scnprintf(buf + len, sizeof(buf) - len, "|%s|",
 			"TUI_ACTIVE");
+
+#ifdef MI_DISPLAY_MODIFY
+	if (state & DP_STATE_PANEL_RECONNECT)
+		len += scnprintf(buf + len, sizeof(buf) - len, "|%s|",
+				"PANEL_RECONNECT");
+#endif
 
 	if (!strlen(buf))
 		return "DISCONNECTED";
@@ -220,6 +230,10 @@ struct dp_display_private {
 	bool pm_qos_requested;
 
 	struct notifier_block usb_nb;
+#ifdef MI_DISPLAY_MODIFY
+	int reconnect_times;
+	bool connect_ongoing;
+#endif
 };
 
 static const struct of_device_id dp_dt_match[] = {
@@ -884,11 +898,20 @@ static bool dp_display_send_hpd_event(struct dp_display_private *dp)
 	connector->status = display->is_sst_connected ? connector_status_connected :
 			connector_status_disconnected;
 
+
+#ifdef MI_DISPLAY_MODIFY
+	if (dp->cached_connector_status == connector->status && !dp->debug->skip_uevent) {
+		DP_DEBUG("connector status (%d) unchanged, skipping uevent\n",
+				dp->cached_connector_status);
+		return false;
+	}
+#else
 	if (dp->cached_connector_status == connector->status) {
 		DP_DEBUG("connector status (%d) unchanged, skipping uevent\n",
 				dp->cached_connector_status);
 		return false;
 	}
+#endif
 
 	dp->cached_connector_status = connector->status;
 
@@ -937,6 +960,15 @@ static int dp_display_send_hpd_notification(struct dp_display_private *dp, bool 
 	 * message. This check here will avoid any unintended duplicate
 	 * notifications.
 	 */
+#ifdef MI_DISPLAY_MODIFY
+	if (dp_display_state_is(DP_STATE_CONNECT_NOTIFIED) && hpd && !dp->debug->skip_uevent) {
+		DP_DEBUG("connection notified already, skip notification\n");
+		goto skip_wait;
+	} else if (dp_display_state_is(DP_STATE_DISCONNECT_NOTIFIED) && !hpd && !dp->debug->skip_uevent) {
+		DP_DEBUG("disonnect notified already, skip notification\n");
+		goto skip_wait;
+	}
+#else
 	if (dp_display_state_is(DP_STATE_CONNECT_NOTIFIED) && hpd) {
 		DP_DEBUG("connection notified already, skip notification\n");
 		goto skip_wait;
@@ -944,6 +976,7 @@ static int dp_display_send_hpd_notification(struct dp_display_private *dp, bool 
 		DP_DEBUG("disonnect notified already, skip notification\n");
 		goto skip_wait;
 	}
+#endif
 
 	dp->aux->state |= DP_STATE_NOTIFICATION_SENT;
 
@@ -1271,6 +1304,8 @@ static int dp_display_process_hpd_high(struct dp_display_private *dp)
 		return -EISCONN;
 	}
 
+	DP_INFO("process dp hpd level high\n");
+
 	dp_display_state_add(DP_STATE_CONNECTED);
 
 	dp->dp_display.max_pclk_khz = min(dp->parser->max_pclk_khz,
@@ -1336,9 +1371,44 @@ static int dp_display_process_hpd_high(struct dp_display_private *dp)
 	/*
 	 * ETIMEDOUT --> cable may have been removed
 	 * ENOTCONN --> no downstream device connected
+	 * ENOLINK --> panel edid read error
 	 */
 	if (rc == -ETIMEDOUT || rc == -ENOTCONN)
 		goto err_unready;
+
+#ifdef MI_DISPLAY_MODIFY
+	/*
+	 * retry. reconnect dp,
+	 * init host -> uninit host -> init host
+	 * reget edid data.
+	 */
+	if(dp->debug->read_edid_error || rc == -ENOLINK) {
+		dp->debug->read_edid_error = false;
+
+		if(dp_display_state_is(DP_STATE_PANEL_RECONNECT)) {
+			dp->reconnect_times--;
+			if(dp->reconnect_times <= 0)
+				dp_display_state_remove(DP_STATE_PANEL_RECONNECT);
+
+			DP_INFO("dp reconnected, read edid error. reconnect:%d\n",dp->reconnect_times);
+			goto err_unready;
+		}
+
+	}
+
+	DP_INFO("Process panel status Ok!!!\n");
+#endif
+
+	/*
+	 * In the PHY layer of a DP connection (cable or/and the sink), often
+	 * "Link Training(LT) tunable PHY repeaters (LTTPR)" are employed. These LTTPRs can operate
+	 * in 2 modes: Transparent & Non-Transparent. Even though the DP 1.4spec suggests
+	 * transparent mode as default for LTTPRs, it is observed that some cables with LTTPRs
+	 * (e.g. apple cable) misbehave if the operating mode isn't set explicitly. Hence set the
+	 * transparent mode if at least 1 LTTPR is present in the path.
+	*/
+	if (drm_dp_lttpr_count(dp->panel->lttpr_common_caps))
+		dp->panel->set_lttpr_mode(dp->panel, true);
 
 	dp->link->process_request(dp->link);
 	dp->panel->handle_sink_request(dp->panel);
@@ -1367,7 +1437,11 @@ static int dp_display_process_hpd_high(struct dp_display_private *dp)
 err_mst:
 	dp_display_update_mst_state(dp, false);
 err_unready:
+#ifdef MI_DISPLAY_MODIFY
+	dp_display_host_deinit(dp);
+#else
 	dp_display_host_unready(dp);
+#endif
 err_state:
 	dp_display_state_remove(DP_STATE_CONNECTED);
 err_unlock:
@@ -1509,8 +1583,12 @@ static int dp_display_usbpd_configure_cb(struct device *dev)
 			return rc;
 	}
 
-	mutex_lock(&dp->session_lock);
+	DP_INFO("dp configure callback\n");
 
+	mutex_lock(&dp->session_lock);
+#ifdef MI_DISPLAY_MODIFY
+	dp->reconnect_times = MAX_TIMES_RECONNECT;
+#endif
 	if (dp_display_state_is(DP_STATE_TUI_ACTIVE)) {
 		dp_display_state_log("[TUI is active]");
 		mutex_unlock(&dp->session_lock);
@@ -1519,6 +1597,9 @@ static int dp_display_usbpd_configure_cb(struct device *dev)
 
 	dp_display_state_remove(DP_STATE_ABORTED);
 	dp_display_state_add(DP_STATE_CONFIGURED);
+#ifdef MI_DISPLAY_MODIFY
+	dp_display_state_add(DP_STATE_PANEL_RECONNECT);
+#endif
 
 	rc = dp_display_host_init(dp);
 	if (rc) {
@@ -1581,22 +1662,6 @@ static int dp_display_get_mst_pbn_div(struct dp_display *dp_display)
 	lane_count = dp->link->link_params.lane_count;
 
 	return link_rate * lane_count / 54000;
-}
-
-static int dp_display_get_active_stream_count(struct dp_display *dp_display)
-{
-	struct dp_display_private *dp;
-	int count = 0;
-
-	if (!dp_display) {
-		DP_ERR("invalid params\n");
-		return 0;
-	}
-
-	dp = container_of(dp_display, struct dp_display_private, dp_display);
-	count = dp->active_stream_cnt;
-
-	return count;
 }
 
 static int dp_display_stream_pre_disable(struct dp_display_private *dp,
@@ -1701,7 +1766,9 @@ static int dp_display_handle_disconnect(struct dp_display_private *dp, bool skip
 	dp_display_host_unready(dp);
 
 	dp->tot_lm_blks_in_use = 0;
-
+#ifdef MI_DISPLAY_MODIFY
+	dp->reconnect_times = MAX_TIMES_RECONNECT;
+#endif
 	mutex_unlock(&dp->session_lock);
 
 	SDE_EVT32_EXTERNAL(SDE_EVTLOG_FUNC_EXIT, dp->state);
@@ -2018,9 +2085,13 @@ static void dp_display_connect_work(struct work_struct *work)
 		DP_WARN("Sink disconnected\n");
 		return;
 	}
-
+#ifdef MI_DISPLAY_MODIFY
+	dp->connect_ongoing = true;
+#endif
 	rc = dp_display_process_hpd_high(dp);
-
+#ifdef MI_DISPLAY_MODIFY
+	dp->connect_ongoing = false;
+#endif
 	if (!rc && dp->panel->video_test)
 		dp->link->send_test_response(dp->link);
 }
@@ -2031,10 +2102,6 @@ static void dp_display_disconnect_work(struct work_struct *work)
 			struct dp_display_private, disconnect_work);
 
 	dp_display_handle_disconnect(dp, false);
-
-	if (dp->debug->sim_mode && dp_display_state_is(DP_STATE_ABORTED))
-		dp_display_host_deinit(dp);
-
 	dp->debug->abort(dp->debug);
 }
 
@@ -2050,9 +2117,6 @@ static int dp_display_usb_notifier(struct notifier_block *nb,
 		dp_display_state_add(DP_STATE_ABORTED);
 		dp->ctrl->abort(dp->ctrl, true);
 		dp->aux->abort(dp->aux, true);
-
-		dp->power->park_clocks(dp->power);
-
 		queue_work(dp->wq, &dp->disconnect_work);
 	}
 
@@ -2157,7 +2221,6 @@ static int dp_init_sub_modules(struct dp_display_private *dp)
 	}
 
 	g_dp_display->is_mst_supported = dp->parser->has_mst;
-	g_dp_display->dp_mst_lm_merge_enable = dp->parser->dp_mst_lm_merge_en;
 	g_dp_display->dsc_cont_pps = dp->parser->dsc_continuous_pps;
 
 	dp->catalog = dp_catalog_get(dev, dp->parser);
@@ -3012,7 +3075,6 @@ static int dp_display_validate_topology(struct dp_display_private *dp,
 	bool dsc_capable = dp_mode->capabilities & DP_PANEL_CAPS_DSC;
 	u32 fps = dp_mode->timing.refresh_rate;
 	int avail_lm = 0;
-	bool mst_cap = false;
 
 	mutex_lock(&dp->accounting_lock);
 
@@ -3020,24 +3082,6 @@ static int dp_display_validate_topology(struct dp_display_private *dp,
 	if (rc) {
 		DP_ERR("error getting mixer count. rc:%d\n", rc);
 		goto end;
-	}
-
-	mst_cap = dp_panel->read_mst_cap(dp_panel);
-
-	if (dp->parser->has_mst && dp->parser->dp_mst_lm_merge_en &&
-			mst_cap && avail_res->num_lm) {
-		if (avail_res->num_lm == 1) {
-			/* if only 1 lm is available, assign it */
-			num_lm = 1;
-		} else {
-			if (dp->active_stream_cnt) {
-				/* no streams left, assign from available lm */
-				num_lm = min(num_lm, avail_res->num_lm);
-			} else {
-				/* keep at least 1 lm for second stream, assign from rest */
-				num_lm = min(num_lm, avail_res->num_lm - 1);
-			}
-		}
 	}
 
 	/* Merge using DSC, if enabled */
@@ -3763,52 +3807,6 @@ static void dp_display_wakeup_phy_layer(struct dp_display *dp_display,
 		hpd->wakeup_phy(hpd, wakeup);
 }
 
-static int dp_display_get_display_type(struct dp_display *dp_display,
-		const char **display_type)
-{
-	struct dp_display_private *dp;
-	struct device_node *of_node;
-
-	if (!dp_display || !display_type) {
-		pr_err("invalid input\n");
-		return -EINVAL;
-	}
-
-	dp = container_of(dp_display, struct dp_display_private, dp_display);
-
-	if (dp->parser)
-		*display_type = dp->parser->display_type;
-	else {
-		of_node = dp->pdev->dev.of_node;
-		*display_type = of_get_property(of_node, "qcom,display-type",
-					NULL);
-	}
-	return 0;
-}
-
-static int dp_display_mst_get_fixed_topology_display_type(
-		struct dp_display *dp_display, u32 strm_id,
-		const char **display_type)
-{
-	struct dp_display_private *dp;
-
-	if (!dp_display || !display_type) {
-		pr_err("invalid input\n");
-		return -EINVAL;
-	}
-
-	if (strm_id >= DP_STREAM_MAX) {
-		pr_err("invalid stream id:%d\n", strm_id);
-		return -EINVAL;
-	}
-
-	dp = container_of(dp_display, struct dp_display_private, dp_display);
-
-	*display_type = dp->parser->mst_fixed_display_type[strm_id];
-
-	return 0;
-}
-
 static int dp_display_probe(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -3892,10 +3890,6 @@ static int dp_display_probe(struct platform_device *pdev)
 					dp_display_get_available_dp_resources;
 	g_dp_display->clear_reservation = dp_display_clear_reservation;
 	g_dp_display->get_mst_pbn_div = dp_display_get_mst_pbn_div;
-	g_dp_display->get_active_stream_count = dp_display_get_active_stream_count;
-	g_dp_display->get_display_type = dp_display_get_display_type;
-	g_dp_display->mst_get_fixed_topology_display_type =
-				dp_display_mst_get_fixed_topology_display_type;
 
 	rc = component_add(&pdev->dev, &dp_display_comp_ops);
 	if (rc) {
@@ -3991,6 +3985,10 @@ static int dp_pm_prepare(struct device *dev)
 	struct dp_display_private *dp = container_of(g_dp_display,
 			struct dp_display_private, dp_display);
 
+#ifdef MI_DISPLAY_MODIFY
+	if (dp->connect_ongoing)
+		return -EBUSY;
+#endif
 	SDE_EVT32_EXTERNAL(SDE_EVTLOG_FUNC_ENTRY);
 	mutex_lock(&dp->session_lock);
 	dp_display_set_mst_state(g_dp_display, PM_SUSPEND);
@@ -4020,7 +4018,10 @@ static void dp_pm_complete(struct device *dev)
 {
 	struct dp_display_private *dp = container_of(g_dp_display,
 			struct dp_display_private, dp_display);
-
+#ifdef MI_DISPLAY_MODIFY
+	if (dp->connect_ongoing)
+		return;
+#endif
 	SDE_EVT32_EXTERNAL(SDE_EVTLOG_FUNC_ENTRY);
 	mutex_lock(&dp->session_lock);
 	dp_display_set_mst_state(g_dp_display, PM_DEFAULT);

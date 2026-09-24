@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -17,6 +17,8 @@
 #include "cam_mem_mgr.h"
 #include "cam_cpas_api.h"
 #include "cam_compat.h"
+
+#include <media/cam_csiphy_xm_data.h>
 
 #define SCM_SVC_CAMERASS 0x18
 #define SECURE_SYSCALL_ID 0x6
@@ -36,9 +38,14 @@
 /*
  * PHY ON-The-Go Buffer Size
  */
-#define CSIPHY_ONTHEGO_BUFSIZE 30
+#define CSIPHY_ONTHEGO_BUFSIZE 150
 
 
+/* xiaomi add for mipi phy backup setting begin*/
+uint64_t xm_mipi_kmd_setting = 0;
+/* xiaomi add for mipi phy backup setting end*/
+
+extern struct cam_csiphy_xm_data_t cam_csiphy_xm_data;
 
 struct g_csiphy_data {
 	void __iomem *base_address;
@@ -54,7 +61,7 @@ static DEFINE_MUTEX(active_csiphy_cnt_mutex);
 static DEFINE_MUTEX(main_aon_selection);
 static struct g_csiphy_data g_phy_data[MAX_CSIPHY] = {0};
 static int active_csiphy_hw_cnt;
-static char csiphy_onthego_regs[20];
+static char csiphy_onthego_regs[CSIPHY_ONTHEGO_BUFSIZE - 10]; // mod by xiaomi
 static int csiphy_onthego_reg_count[MAX_CSIPHY];
 static unsigned int csiphy_onthego_regvals[MAX_CSIPHY][CSIPHY_ONTHEGO_BUFSIZE];
 
@@ -83,7 +90,7 @@ static int csiphy_set_onthego_values(const char *val, const struct kernel_param 
 		return -EINVAL;
 	}
 
-	strscpy(csiphy_onthego_regs, p1, 20);
+	strscpy(csiphy_onthego_regs, p1, sizeof(csiphy_onthego_regs)); // mod by xiaomi
 	while ((token = strsep(&p1, ":")) != NULL) {
 		if (!kstrtoint(token, 0, &idx) && idx >= 0 && idx < MAX_CSIPHY)
 			phy_target[idx] = true;
@@ -98,6 +105,12 @@ static int csiphy_set_onthego_values(const char *val, const struct kernel_param 
 		}
 		return 0;
 	}
+
+	//xiaomi add begin
+	if (phy_target[idx]) {
+		csiphy_onthego_reg_count[idx] = 0;
+	}
+	//xiaomi add end
 
 	while ((token = strsep(&p1, ",")) != NULL) {
 		if (!kstrtoint(token, 0, &onthego_val))
@@ -304,7 +317,7 @@ static inline void cam_csiphy_apply_onthego_reg_values(void __iomem *csiphybase,
 			csiphy_onthego_regvals[csiphy_idx][i+2]);
 	}
 
-	csiphy_onthego_reg_count[csiphy_idx] = 0;
+	//csiphy_onthego_reg_count[csiphy_idx] = 0;// delete this code by xiaomi
 }
 
 static inline int cam_csiphy_release_from_reset_state(struct csiphy_device *csiphy_dev,
@@ -1058,10 +1071,10 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 	int                      rc = 0, i;
 	uintptr_t                generic_pkt_ptr;
 	struct cam_packet       *csl_packet = NULL;
-	struct cam_packet       *csl_packet_u = NULL;
 	struct cam_cmd_buf_desc *cmd_desc = NULL;
 	size_t                   len, remain_len;
 	uint32_t                 cmd_buf_type;
+
 
 	if (!cfg_dev || !csiphy_dev) {
 		CAM_ERR(CAM_CSIPHY, "Invalid Args");
@@ -1081,18 +1094,21 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 		CAM_ERR(CAM_CSIPHY,
 			"Inval cam_packet strut size: %zu, len_of_buff: %zu",
 			 sizeof(struct cam_packet), len);
+		cam_mem_put_cpu_buf(cfg_dev->packet_handle);
 		rc = -EINVAL;
-		goto put_buf;
+		return rc;
 	}
 
 	remain_len -= (size_t)cfg_dev->offset;
-	csl_packet_u = (struct cam_packet *)
+	csl_packet = (struct cam_packet *)
 		(generic_pkt_ptr + (uint32_t)cfg_dev->offset);
 
-	rc = cam_packet_util_copy_pkt_to_kmd(csl_packet_u, &csl_packet, remain_len);
-	if (rc) {
-		CAM_ERR(CAM_CSIPHY, "Copying packet to KMD failed");
-		goto put_buf;
+	if (cam_packet_util_validate_packet(csl_packet,
+		remain_len)) {
+		CAM_ERR(CAM_CSIPHY, "Invalid packet params");
+		cam_mem_put_cpu_buf(cfg_dev->packet_handle);
+		rc = -EINVAL;
+		return rc;
 	}
 
 	if (csl_packet->num_cmd_buf)
@@ -1101,8 +1117,9 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 			csl_packet->cmd_buf_offset / 4);
 	else {
 		CAM_ERR(CAM_CSIPHY, "num_cmd_buffer = %d", csl_packet->num_cmd_buf);
+		cam_mem_put_cpu_buf(cfg_dev->packet_handle);
 		rc = -EINVAL;
-		goto end;
+		return rc;
 	}
 
 	CAM_DBG(CAM_CSIPHY, "CSIPHY:%u num cmd buffers received: %u",
@@ -1110,8 +1127,10 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 
 	for (i = 0; i < csl_packet->num_cmd_buf; i++) {
 		rc = cam_packet_util_validate_cmd_desc(&cmd_desc[i]);
-		if (rc)
-			goto end;
+		if (rc) {
+			cam_mem_put_cpu_buf(cfg_dev->packet_handle);
+			return rc;
+		}
 
 		cmd_buf_type = cmd_desc[i].meta_data;
 
@@ -1140,9 +1159,6 @@ int32_t cam_cmd_buf_parser(struct csiphy_device *csiphy_dev,
 		if (rc)
 			break;
 	}
-end:
-	cam_common_mem_free(csl_packet);
-put_buf:
 	cam_mem_put_cpu_buf(cfg_dev->packet_handle);
 	return rc;
 }
@@ -1219,6 +1235,61 @@ static inline void __cam_csiphy_compute_cdr_value(
 		*cdr_val -= csiphy_device->cdr_params.cdr_tolerance;
 }
 
+/* xiaomi add for mipi phy backup setting begin*/
+static void XM_MIPI_KMD_GET_CTRL_FLAG_VAL(int ctl_no, u8 *flag, u8 *val)
+{
+	u8 *p1;
+	u8 *p2;
+
+	p1 = flag;
+	p2 = val;
+
+	*p1 = XM_MIPI_KMD_GET_CTRL_FLAG(ctl_no);
+	*p2 = XM_MIPI_KMD_GET_CTRL_VAL(ctl_no);
+
+	return ;
+}
+static int cam_csiphy_cphy_reconfig_work(struct csiphy_device *csiphy_device, struct data_rate_reg_info_t *drate_settings)
+{
+	struct cam_hw_soc_info *soc_info;
+	u8 phy_flag = 0;
+	u8 phy_val = 0;
+	int skip_current_setting = 0;
+
+	if ((!csiphy_device) || (!drate_settings)) {
+		skip_current_setting = 0;
+		return skip_current_setting;
+	}
+
+	soc_info = &csiphy_device->soc_info;
+	if (!soc_info) {
+		skip_current_setting = 0;
+		return skip_current_setting;
+	}
+
+	if ((csiphy_device->device_has_customized == 1) && (drate_settings->this_setting_max_choice != 0)) {
+		if (strcmp(csiphy_device->phy_dts_name, "qcom,csiphy-v2.2.1-p16u") == 0) {
+			XM_MIPI_KMD_GET_CTRL_FLAG_VAL(soc_info->index, &phy_flag, &phy_val);
+			CAM_INFO(CAM_ISP, "crc_error_occur[%d]", cam_csiphy_xm_data.crc_error_occur);
+			CAM_INFO(CAM_ISP, "phy[%d], flag=[%d], val=[%d], max_choice[%d]", soc_info->index, phy_flag, phy_val, drate_settings->this_setting_max_choice);
+			if (phy_flag) {
+				if (phy_val != drate_settings->this_setting_current_choice) {
+					skip_current_setting = 1;// continue...
+				} else {
+					skip_current_setting = 0;// find the backup one
+				}
+			} else if (cam_csiphy_xm_data.crc_error_occur && cam_csiphy_xm_data.crc_error_occur != drate_settings->this_setting_current_choice) {
+				skip_current_setting = 1;// continue...
+			}
+		} else {
+			// default is using the 1st setting;
+			skip_current_setting = 0;
+		}
+	}
+	return skip_current_setting;
+}
+/* xiaomi add for mipi phy backup setting end*/
+
 static int cam_csiphy_cphy_data_rate_config(struct csiphy_device *csiphy_device, int32_t idx,
 	uint8_t datarate_variant_idx)
 {
@@ -1279,6 +1350,20 @@ static int cam_csiphy_cphy_data_rate_config(struct csiphy_device *csiphy_device,
 				data_rate_idx, supported_phy_bw, required_phy_data_rate);
 			continue;
 		}
+		/* xiaomi add for mipi phy backup setting begin*/
+		if (cam_csiphy_cphy_reconfig_work(csiphy_device, &drate_settings[data_rate_idx]) == 1) {
+			CAM_INFO(CAM_CSIPHY,
+				"double Skipping table [%d] with BW: %llu, Required data_rate: %llu",
+				data_rate_idx, supported_phy_bw, required_phy_data_rate);
+			continue;
+		}
+
+		CAM_INFO(CAM_CSIPHY,
+			"table [%d] with BW: %llu, max.using [%d.%d]",
+			data_rate_idx, supported_phy_bw,
+			drate_settings[data_rate_idx].this_setting_max_choice,
+			drate_settings[data_rate_idx].this_setting_current_choice);
+		/* xiaomi add for mipi phy backup setting end*/
 
 		CAM_DBG(CAM_CSIPHY, "table[%d] BW : %llu Selected",
 			data_rate_idx, supported_phy_bw);
@@ -1310,16 +1395,24 @@ static int cam_csiphy_cphy_data_rate_config(struct csiphy_device *csiphy_device,
 				cam_io_w_mb(reg_data,
 					csiphybase + reg_addr);
 			break;
+/* xiaomi add channel log - begin */
 			case CSIPHY_SHORT_CHANNEL_PARAMS:
 				if (channel_type == CAM_CSIPHY_DATARATE_SHORT_CHANNEL)
+				{
 					cam_io_w_mb(reg_data,
 						csiphybase + reg_addr);
+					CAM_DBG(CAM_CSIPHY, "param_type:%d,channel_type == CAM_CSIPHY_DATARATE_SHORT_CHANNEL",reg_param_type);
+				}
 			break;
 			case CSIPHY_STANDARD_CHANNEL_PARAMS:
 				if (channel_type == CAM_CSIPHY_DATARATE_STANDARD_CHANNEL)
+				{
 					cam_io_w_mb(reg_data,
 						csiphybase + reg_addr);
+					CAM_DBG(CAM_CSIPHY, "param_type:%d,channel_type == CAM_CSIPHY_DATARATE_STANDARD_CHANNEL",reg_param_type);
+				}
 			break;
+/* xiaomi add channel log - end */
 			case CSIPHY_SETTLE_CNT_LOWER_BYTE:
 				cam_io_w_mb(settle_cnt & 0xFF,
 					csiphybase + reg_addr);
@@ -1564,6 +1657,17 @@ int32_t cam_csiphy_config_dev(struct csiphy_device *csiphy_dev,
 	do_div(intermediate_var, 200000000);
 	settle_cnt = intermediate_var;
 	skew_cal_enable = csiphy_dev->csiphy_info[index].mipi_flags;
+
+	/* xiaomi add DPHY log - begin */
+	if (!csiphy_dev->csiphy_info[index].csiphy_3phase){
+		for (i = 0; i < cfg_size; i++) {
+			CAM_DBG(MI_DEBUG,
+				"register index: %d/%d, param_type: %d, writing reg: %x, val: %x, delay: %dus",
+				i, cfg_size, reg_array[i].csiphy_param_type, reg_array[i].reg_addr,
+				reg_array[i].reg_data, reg_array[i].delay);
+		}
+	}
+	/* xiaomi add DPHY log - end */
 
 	for (i = 0; i < cfg_size; i++) {
 		switch (reg_array[i].csiphy_param_type) {

@@ -20,6 +20,7 @@
 #include "internal.h"
 #include "lpass-cdc-clk-rsc.h"
 #include <linux/qti-regmap-debugfs.h>
+#include "../typec_analog_acc.h"
 
 #define DRV_NAME "lpass-cdc"
 
@@ -1195,6 +1196,18 @@ static int lpass_cdc_soc_codec_probe(struct snd_soc_component *component)
 			"%s: Registration with SND event FWK failed ret = %d\n",
 			__func__, ret);
 		goto err;
+	}
+
+	if (of_find_property(component->card->dev->of_node,
+		"qcom,unsupported-typec-analog-acc", NULL)) {
+		dev_info(component->dev,"%s: typec_analog_acc is unsupported\n",
+				__func__);
+		ret = typec_analog_acc_init(component);
+		if (!ret) {
+			dev_err(component->dev,
+				"%s: init typec analog accessory failed ret = %d\n",
+				__func__, ret);
+		}
 	}
 
 	dev_dbg(component->dev, "%s: lpass_cdc soc codec probe success\n",

@@ -18,6 +18,26 @@ module_entry(
     ]
 )
 
+#define ddk_module() for st_fts
+module_entry(
+    name = "st_fts",
+    config_option = "CONFIG_TOUCHSCREEN_ST",
+    srcs = [
+            "st/fts.c",
+            "st/fts_lib/ftsCompensation.c",
+            "st/fts_lib/ftsCore.c",
+            "st/fts_lib/ftsError.c",
+            "st/fts_lib/ftsFlash.c",
+            "st/fts_lib/ftsFrame.c",
+            "st/fts_lib/ftsGesture.c",
+            "st/fts_lib/ftsIO.c",
+            "st/fts_lib/ftsTest.c",
+            "st/fts_lib/ftsTime.c",
+            "st/fts_lib/ftsTool.c"
+    ],
+    deps = ["qts"],
+)
+
 #define ddk_module() for goodix_ts
 module_entry(
     name = "goodix_ts",
@@ -31,10 +51,10 @@ module_entry(
             "goodix_berlin_driver/goodix_ts_core.c",
             "goodix_berlin_driver/goodix_ts_gesture.c",
             "goodix_berlin_driver/goodix_ts_inspect.c",
-            "goodix_berlin_driver/goodix_ts_proc.c",
             "goodix_berlin_driver/goodix_ts_tools.c",
             "goodix_berlin_driver/goodix_ts_utils.c"
-    ]
+    ],
+    deps = ["qts"],
 )
 
 #define ddk_module() for nt36xxx
@@ -46,7 +66,8 @@ module_entry(
             "nt36xxx/nt36xxx_fw_update.c",
             "nt36xxx/nt36xxx_mp_ctrlram.c",
             "nt36xxx/nt36xxx.c"
-    ]
+    ],
+    deps = ["qts"],
 )
 
 #define ddk_module() for focaltech_fts
@@ -63,7 +84,8 @@ module_entry(
             "focaltech_touch/focaltech_gesture.c",
             "focaltech_touch/focaltech_i2c.c",
             "focaltech_touch/focaltech_point_report_check.c"
-    ]
+    ],
+    deps = ["qts"],
 )
 
 #define ddk_module() for synaptics_tcm_ts
@@ -75,6 +97,25 @@ module_entry(
             "synaptics_tcm/synaptics_tcm_i2c.c",
             "synaptics_tcm/synaptics_tcm_touch.c"
     ]
+)
+
+
+#define ddk_module() for synaptics_tcm2_ts
+module_entry(
+    name = "synaptics_tcm2_ts",
+    config_option = "CONFIG_TOUCHSCREEN_SYNAPTICS_TCM2",
+    srcs = [
+			"synaptics_tcm2/syna_tcm2.c",
+			"synaptics_tcm2/syna_tcm2_platform_spi.c",
+			"synaptics_tcm2/syna_tcm2_sysfs.c",
+			"synaptics_tcm2/syna_tcm2_cdev.c",
+			"synaptics_tcm2/tcm/synaptics_touchcom_func_base.c",
+			"synaptics_tcm2/tcm/synaptics_touchcom_func_touch.c",
+			"synaptics_tcm2/tcm/synaptics_touchcom_core_v1.c",
+			"synaptics_tcm2/tcm/synaptics_touchcom_image_parsing.c",
+			"synaptics_tcm2/tcm/synaptics_touchcom_func_reflash.c"
+    ],
+    deps = ["qts"],
 )
 
 #define ddk_module() for atmel_mxt_ts
@@ -125,6 +166,9 @@ module_entry(
     config_option = "CONFIG_TOUCHSCREEN_PARADE_I2C",
     srcs = [
             "pt/pt_i2c.c"
+    ],
+    deps = [
+	    "pt_ts"
     ]
 )
 
@@ -134,6 +178,9 @@ module_entry(
     config_option = "CONFIG_TOUCHSCREEN_PARADE_DEVICE_ACCESS",
     srcs = [
             "pt/pt_device_access.c"
+    ],
+    deps = [
+	    "pt_ts"
     ]
 )
 
@@ -143,6 +190,9 @@ module_entry(
     config_option = "CONFIG_TOUCHSCREEN_PARADE_DEBUG_MDL",
     srcs = [
             "pt/pt_debug.c"
+    ],
+    deps = [
+            "pt_ts"
     ]
 )
 
@@ -160,21 +210,8 @@ module_entry(
             "raydium/chip_raydium/f303_ic_test.c",
             "raydium/chip_raydium/ic_drv_global.c",
             "raydium/chip_raydium/ic_drv_interface.c"
-    ]
-)
-
-#define ddk_module() for eswin_ts
-module_entry(
-    name = "eswin_ts",
-    config_option = "CONFIG_TOUCHSCREEN_EPHTouch",
-    srcs = [
-            "eswin_touch/eswin_eph861x.c",
-            "eswin_touch/eswin_eph861x_bootloader.c",
-            "eswin_touch/eswin_eph861x_comms.c",
-            "eswin_touch/eswin_eph861x_eswin.c",
-            "eswin_touch/eswin_eph861x_i2c.c",
-            "eswin_touch/eswin_eph861x_spi.c",
-            "eswin_touch/eswin_eph861x_tlv_command.c",
-            "eswin_touch/eswin_eph861x_tlv_report.c",
+    ],
+    deps = [
+	    "glink_comm"
     ]
 )

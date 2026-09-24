@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/init.h>
@@ -10,7 +10,7 @@
 #include <linux/device.h>
 #include <glink_interface.h>
 
-static struct glink_touch_dev *touch_pdev = NULL;
+static struct glink_touch_dev *touch_pdev;
 struct touch_channel_ops touch_ops;
 
 
@@ -19,7 +19,7 @@ void glink_touch_channel_init(void (*fn1)(bool), void (*fn2)(void *data, int len
 	touch_ops.glink_channel_state = fn1;
 	touch_ops.rx_msg = fn2;
 }
-EXPORT_SYMBOL(glink_touch_channel_init);
+EXPORT_SYMBOL_GPL(glink_touch_channel_init);
 
 int glink_touch_tx_msg(void  *msg, size_t len)
 {
@@ -42,19 +42,14 @@ int glink_touch_tx_msg(void  *msg, size_t len)
 
 	return ret;
 }
-EXPORT_SYMBOL(glink_touch_tx_msg);
+EXPORT_SYMBOL_GPL(glink_touch_tx_msg);
 
 static int glink_touch_probe(struct rpmsg_device  *touch_rpdev)
 {
 	int ret = 0;
 	void *msg = NULL;
 
-	if (!touch_rpdev) {
-		pr_err("rpmsg_device is null\n");
-		return -ENODEV;
-	}
-
-	pr_info("%s Start of glink_touch_probe\n", __func__);
+	pr_info(" Start of %s\n", __func__);
 	touch_pdev = devm_kzalloc(&touch_rpdev->dev, sizeof(*touch_pdev), GFP_KERNEL);
 	if (!touch_pdev)
 		return -ENOMEM;
@@ -63,16 +58,19 @@ static int glink_touch_probe(struct rpmsg_device  *touch_rpdev)
 	touch_pdev->dev = &touch_rpdev->dev;
 	if (touch_pdev->channel == NULL)
 		return -ENOMEM;
-		
+
 	touch_pdev->chnl_state = true;
 	dev_set_drvdata(&touch_rpdev->dev, touch_pdev);
-	
+
 	/* send a callback to slate-MSM touch driver*/
+	if (touch_ops.glink_channel_state == NULL)
+		return -EPROBE_DEFER;
+
 	touch_ops.glink_channel_state(true);
 	if (touch_pdev->message == NULL)
 		ret = glink_touch_tx_msg(msg, 0);
-	
-	pr_info("%s End of glink_touch_probe\n", __func__);
+
+	pr_info("End of %s\n", __func__);
 	return 0;
 }
 
@@ -83,7 +81,7 @@ static void glink_touch_remove(struct rpmsg_device *touch_rpdev)
 	dev_dbg(&touch_rpdev->dev, "rpmsg client driver is removed\n");
 	touch_ops.glink_channel_state(false);
 	dev_set_drvdata(&touch_rpdev->dev, NULL);
-	
+
 }
 
 static int glink_touch_cb(struct rpmsg_device *touch_rpdev,
@@ -106,7 +104,11 @@ static const struct rpmsg_device_id glink_touch_driver_id_table[] = {
 MODULE_DEVICE_TABLE(rpmsg, glink_touch_driver_id_table);
 
 static const struct of_device_id glink_touch_driver_of_match[] = {
+#ifdef CONFIG_ARCH_VIENNA
+	{ .compatible = "qcom,glinkpkt-am-touch" },
+#else
 	{ .compatible = "qcom,slatetouch-rpmsg" },
+#endif
 	{},
 };
 
@@ -123,4 +125,4 @@ static struct rpmsg_driver glink_touch_client = {
 module_rpmsg_driver(glink_touch_client);
 
 MODULE_DESCRIPTION("Interface Driver for MSM TOUCH and RPMSG");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -70,8 +70,6 @@
 
 #define AC_PRIORITY_NUM                 4
 
-#define WLAN_TDLS_STA_KICKOUT_THRESHOLD 3
-
 /* Default tdls serialize timeout is set to 4 (peer delete) + 1 secs */
 #ifdef FEATURE_RUNTIME_PM
 /* Add extra PMO_RESUME_TIMEOUT for runtime PM resume timeout */

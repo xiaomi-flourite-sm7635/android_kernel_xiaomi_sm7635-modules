@@ -189,7 +189,7 @@ static int msm_audio_dma_buf_map(struct dma_buf *dma_buf,
 	if (IS_ERR(alloc_data->table)) {
 		rc = PTR_ERR(alloc_data->table);
 		dev_err(cb_dev,
-			"%s: Fail to map attachment, rc = %d\n",
+			"%s: Fail to map attachment, rc = %d[TF-NOSOUND][ION]\n",
 			__func__, rc);
 		goto detach_dma_buf;
 	}

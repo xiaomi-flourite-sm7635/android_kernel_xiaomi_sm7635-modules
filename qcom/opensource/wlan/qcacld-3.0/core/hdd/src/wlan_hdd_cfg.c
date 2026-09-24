@@ -230,6 +230,7 @@ QDF_STATUS hdd_update_mac_config(struct hdd_context *hdd_ctx)
 	}
 
 	memset(mac_table, 0, sizeof(mac_table));
+	hdd_info("loading wlan_mac from file:%s", WLAN_MAC_FILE);
 	status = hdd_firmware_request_nowarn(&fw, WLAN_MAC_FILE,
 					     hdd_ctx->parent_dev);
 	if (status) {

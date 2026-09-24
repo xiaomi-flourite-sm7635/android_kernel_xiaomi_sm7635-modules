@@ -178,6 +178,10 @@ struct cam_hw_acquire_stream_caps {
  * @total_ports_acq        Total ports acquired ipp+ppp+rdi
  * @op_params:             OP Params from hw_mgr to ctx
  * @mini_dump_cb:          Mini dump callback function
+* add by xiaomi begin
+* @crc_error_divisor:     Width/divisor pixels per line report crc errors will trigger
+*                         internal recovery, only for CPHY
+* add by xiaomi end
  *
  */
 struct cam_hw_acquire_args {
@@ -191,6 +195,9 @@ struct cam_hw_acquire_args {
 	void                        *ctxt_to_hw_map;
 	uint32_t                     hw_mgr_ctx_id;
 	uint32_t                     op_flags;
+	/*add by xiaomi begin*/
+	uint32_t                     crc_error_divisor;
+	/*add by xiaomi end*/
 	int32_t                      link_hdl;
 	uint32_t                     acquired_hw_id[CAM_MAX_ACQ_RES];
 	uint32_t                     acquired_hw_path[CAM_MAX_ACQ_RES][CAM_MAX_HW_SPLIT];

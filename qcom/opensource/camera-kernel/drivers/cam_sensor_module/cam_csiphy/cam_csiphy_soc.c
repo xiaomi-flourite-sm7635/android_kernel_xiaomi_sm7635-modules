@@ -14,6 +14,8 @@
 #include "include/cam_csiphy_2_2_1_hwreg.h"
 #include "include/cam_csiphy_2_3_0_hwreg.h"
 
+#include <media/cam_csiphy_xm_data.h>
+
 /* Clock divide factor for CPHY spec v1.0 */
 #define CSIPHY_DIVISOR_16                    16
 /* Clock divide factor for CPHY spec v1.2 and up */
@@ -22,6 +24,13 @@
 #define CSIPHY_DIVISOR_8                     8
 #define CSIPHY_LOG_BUFFER_SIZE_IN_BYTES      250
 #define ONE_LOG_LINE_MAX_SIZE                20
+
+static uint8_t init_once = 0;
+/* non-zero indicates that the BackupEQ needs to be Enabled */
+static int crc_error_occur = 0;
+struct cam_csiphy_xm_data_t cam_csiphy_xm_data;
+static struct kobject csiphy_umd_paras_kobject;
+static void csiphy_umd_paras_kobj_init(void);
 
 static int cam_csiphy_io_dump(void __iomem *base_addr, uint16_t num_regs, int csiphy_idx)
 {
@@ -334,6 +343,11 @@ int32_t cam_csiphy_parse_dt_info(struct platform_device *pdev,
 
 	csiphy_dev->prgm_cmn_reg_across_csiphy = (bool) is_regulator_enable_sync;
 
+	if (init_once == 0) {
+		csiphy_umd_paras_kobj_init();
+		init_once = 1;
+	}
+
 	if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.1.0")) {
 		csiphy_dev->ctrl_reg = &ctrl_reg_2_1_0;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V210;
@@ -364,11 +378,49 @@ int32_t cam_csiphy_parse_dt_info(struct platform_device *pdev,
 		csiphy_dev->hw_version = CSIPHY_VERSION_V221;
 		csiphy_dev->is_divisor_32_comp = true;
 		csiphy_dev->clk_lane = 0;
+	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.2.1-p16u")) {
+		csiphy_dev->ctrl_reg = &ctrl_reg_2_2_1_p16u;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V221;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		csiphy_dev->device_has_customized = 1;
+		strncpy(csiphy_dev->phy_dts_name, "qcom,csiphy-v2.2.1-p16u", strlen("qcom,csiphy-v2.2.1-p16u"));
+		/* xiaomi add cphy reg - begin */
+	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.2.1-n16t")) {
+		csiphy_dev->ctrl_reg = &ctrl_reg_2_2_1_n16t;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V221;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		/* xiaomi add cphy reg - end   */
 	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.3.0")) {
 		csiphy_dev->ctrl_reg = &ctrl_reg_2_3_0;
 		csiphy_dev->hw_version = CSIPHY_VERSION_V230;
 		csiphy_dev->is_divisor_32_comp = true;
 		csiphy_dev->clk_lane = 0;
+		/* xiaomi add cphy reg - begin */
+	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.2.0-n2")) {
+		csiphy_dev->ctrl_reg = &ctrl_reg_2_2_0_n2;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V220;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.2.0-n3")) {
+		csiphy_dev->ctrl_reg = &ctrl_reg_2_2_0_n3;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V220;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.2.0-n11u")) {
+		CAM_ERR(CAM_CSIPHY, "apply N11U csiphy");
+		csiphy_dev->ctrl_reg = &ctrl_reg_2_2_0_n11u;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V220;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		/* xiaomi add cphy reg - end   */
+	} else if (of_device_is_compatible(soc_info->dev->of_node, "qcom,csiphy-v2.2.0-n1")) {
+		csiphy_dev->ctrl_reg = &ctrl_reg_2_2_0_n1;
+		csiphy_dev->hw_version = CSIPHY_VERSION_V220;
+		csiphy_dev->is_divisor_32_comp = true;
+		csiphy_dev->clk_lane = 0;
+		/* xiaomi add cphy reg - end   */
 	} else {
 		CAM_ERR(CAM_CSIPHY, "invalid hw version : 0x%x",
 			csiphy_dev->hw_version);
@@ -439,4 +491,74 @@ int32_t cam_csiphy_soc_release(struct csiphy_device *csiphy_dev)
 	cam_soc_util_release_platform_resource(&csiphy_dev->soc_info);
 
 	return 0;
+}
+
+static ssize_t crc_error_show(struct kobject *kobj, struct kobj_attribute *attr,
+	char *buf)
+{
+	return sprintf(buf, "%d\n", crc_error_occur);
+}
+
+static ssize_t crc_error_store(struct kobject *kobj, struct kobj_attribute *attr,
+	const char *buf, size_t count)
+{
+	int val;
+    if (kstrtoint(buf, 0, &val) == 0) {
+        crc_error_occur = val;
+		CAM_INFO(CAM_CSIPHY,
+			"crc_error_occur updated to %d", crc_error_occur);
+    }
+	cam_csiphy_xm_data.crc_error_occur = crc_error_occur;
+
+	return count;
+}
+
+static ssize_t csiphy_umd_paras_object_show(struct kobject *k, struct attribute *attr, char *buf)
+{
+	struct kobj_attribute *kobj_attr;
+	int ret = -EIO;
+	kobj_attr = container_of(attr, struct kobj_attribute, attr);
+	if (kobj_attr->show)
+		ret = kobj_attr->show(k, kobj_attr, buf);
+	return ret;
+}
+static ssize_t csiphy_umd_paras_object_store(struct kobject *k, struct attribute *attr, const char *buf, size_t size)
+{
+	struct kobj_attribute *kobj_attr;
+	int ret = -EIO;
+	kobj_attr = container_of(attr, struct kobj_attribute, attr);
+	if (kobj_attr->store)
+		ret = kobj_attr->store(k, kobj_attr, buf, sizeof(buf));
+
+	return ret;
+}
+
+static struct kobj_attribute csiphy_umd_paras_attribute =
+	__ATTR(crc_error_occur, 0644, crc_error_show, crc_error_store);
+
+static const struct sysfs_ops csiphy_umd_paras_sysfs_ops = {
+	.show = csiphy_umd_paras_object_show,
+	.store = csiphy_umd_paras_object_store,
+};
+
+static struct kobj_type csiphy_umd_paras_object_type = {
+	.sysfs_ops = &csiphy_umd_paras_sysfs_ops,
+	.release	= NULL,
+};
+static void csiphy_umd_paras_kobj_init(void)
+{
+	int rc = 0;
+	memset(&csiphy_umd_paras_kobject, 0x00, sizeof(csiphy_umd_paras_kobject));
+	if (kobject_init_and_add(&csiphy_umd_paras_kobject, &csiphy_umd_paras_object_type, NULL, "csiphy_umd_paras")) {
+		kobject_put(&csiphy_umd_paras_kobject);
+		return;
+	}
+	kobject_uevent(&csiphy_umd_paras_kobject, KOBJ_ADD);
+	rc = sysfs_create_file(&csiphy_umd_paras_kobject, &csiphy_umd_paras_attribute.attr);
+	if (rc < 0) {
+		CAM_ERR(CAM_CSIPHY,
+			"Failed to create debug attribute, rc=%d\n", rc);
+		sysfs_remove_file(&csiphy_umd_paras_kobject, &csiphy_umd_paras_attribute.attr);
+	}
+	return ;
 }

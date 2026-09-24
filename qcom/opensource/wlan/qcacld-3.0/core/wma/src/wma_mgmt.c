@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1391,7 +1391,11 @@ static void wma_set_mlo_capability(tp_wma_handle wma,
 		 * compatibility purposes. Our internal structures still
 		 * conform to the values as per spec i.e. 0 = MLSR, 1 = MLMR.
 		 */
-		req->mlo_params.max_num_simultaneous_links =
+		if (params->max_num_simultaneous_links)
+			req->mlo_params.max_num_simultaneous_links =
+					params->max_num_simultaneous_links;
+		else
+			req->mlo_params.max_num_simultaneous_links =
 			wlan_mlme_get_sta_mlo_simultaneous_links(psoc) + 1;
 	} else {
 		wma_debug("Peer MLO context is NULL");
@@ -2161,15 +2165,6 @@ static void wma_upt_mlo_partner_info(struct beacon_tmpl_params *params,
 }
 #endif
 
-/*
- * csa_event_bitmap is used to indicate to FW when to
- * send the CSA switch count status from FW to host.
- * See WMI_CSA_EVENT_BMAP for more information.
- * If CSA switch count event is needed to be sent when
- * the switch count is 1 set the bitmap to
- * CSA_EVENT_BITMAP_FW_OFFLOAD (0X80000002).
- */
-#define CSA_EVENT_BITMAP_FW_OFFLOAD 0X80000002
 /**
  * wma_unified_bcn_tmpl_send() - send beacon template to fw
  * @wma:wma handle
@@ -2192,7 +2187,6 @@ static QDF_STATUS wma_unified_bcn_tmpl_send(tp_wma_handle wma,
 	uint16_t p2p_ie_len = 0;
 	uint64_t adjusted_tsf_le;
 	struct ieee80211_frame *wh;
-	bool csa_tx_offload;
 
 	if (!wma_is_vdev_valid(vdev_id)) {
 		wma_err("vdev id:%d is not active ", vdev_id);
@@ -2264,22 +2258,6 @@ static QDF_STATUS wma_unified_bcn_tmpl_send(tp_wma_handle wma,
 			bcn_info->ecsa_count_offset - bytes_to_strip;
 
 	wma_upt_mlo_partner_info(&params, bcn_info, bytes_to_strip);
-
-	csa_tx_offload = wlan_psoc_nif_fw_ext_cap_get(wma->psoc,
-						      WLAN_SOC_CEXT_CSA_TX_OFFLOAD);
-
-	/*
-	 * Set value of csa_event_bitmap to CSA_EVENT_BITMAP_FW_OFFLOAD,
-	 * if csa_tx_offload is enabled. This indicates FW to send the
-	 * CSA event to HOST when CSA down count is set to 1 instead 0.
-	 * When FW sends the event at CSA down count 0, it requests HOST
-	 * to issue VDEV restart 1TBTT timeout post beacon with
-	 * CSA down count 1 is sent. During this 1TBTT window,
-	 * frames might still get sent on the old channel.
-	 */
-	if ((bcn_info->csa_count_offset || bcn_info->ecsa_count_offset) &&
-	    csa_tx_offload)
-		params.csa_event_bitmap = CSA_EVENT_BITMAP_FW_OFFLOAD;
 
 	ret = wmi_unified_beacon_tmpl_send_cmd(wma->wmi_handle,
 				 &params);
@@ -2791,12 +2769,12 @@ static inline void wma_mgmt_pktdump_rx_handler(
  * Return: 0 for success or error code
  */
 static int wma_process_mgmt_tx_completion(tp_wma_handle wma_handle,
-					  uint32_t desc_id, uint32_t status,
-					  uint32_t vdev_id,  int32_t peer_rssi)
+					  uint32_t desc_id, uint32_t status)
 {
 	struct wlan_objmgr_pdev *pdev;
 	qdf_nbuf_t buf = NULL;
 	QDF_STATUS ret;
+	uint8_t vdev_id = 0;
 	struct wmi_mgmt_params mgmt_params = {};
 
 	if (wma_validate_handle(wma_handle))
@@ -2817,16 +2795,10 @@ static int wma_process_mgmt_tx_completion(tp_wma_handle wma_handle,
 	if (buf)
 		wma_mgmt_unmap_buf(wma_handle, buf);
 
+	vdev_id = mgmt_txrx_get_vdev_id(pdev, desc_id);
+	mgmt_params.vdev_id = vdev_id;
 
-	if (vdev_id == INVALID_VDEV_ID)
-		mgmt_params.vdev_id = mgmt_txrx_get_vdev_id(pdev, desc_id);
-	else
-		mgmt_params.vdev_id = vdev_id;
-
-	mgmt_params.peer_rssi = peer_rssi;
-
-	wma_mgmt_pktdump_tx_handler(wma_handle, buf, mgmt_params.vdev_id,
-				    status);
+	wma_mgmt_pktdump_tx_handler(wma_handle, buf, vdev_id, status);
 	ret = mgmt_txrx_tx_completion_handler(pdev, desc_id, status,
 					      &mgmt_params);
 
@@ -2873,7 +2845,6 @@ int wma_mgmt_tx_completion_handler(void *handle, uint8_t *cmpl_event_params,
 	tp_wma_handle wma_handle = (tp_wma_handle)handle;
 	WMI_MGMT_TX_COMPLETION_EVENTID_param_tlvs *param_buf;
 	wmi_mgmt_tx_compl_event_fixed_param *cmpl_params;
-	uint8_t vdev_id = INVALID_VDEV_ID;
 
 	param_buf = (WMI_MGMT_TX_COMPLETION_EVENTID_param_tlvs *)
 		cmpl_event_params;
@@ -2896,12 +2867,8 @@ int wma_mgmt_tx_completion_handler(void *handle, uint8_t *cmpl_event_params,
 						    &params);
 	}
 
-	if (WMI_VDEV_ID_VALID_FROM_INFO_GET(cmpl_params->info))
-		vdev_id = WMI_VDEV_ID_FROM_INFO_GET(cmpl_params->info);
-
 	wma_process_mgmt_tx_completion(wma_handle, cmpl_params->desc_id,
-				       cmpl_params->status, vdev_id,
-				       cmpl_params->ack_rssi);
+				       cmpl_params->status);
 
 	return 0;
 }
@@ -2975,8 +2942,7 @@ int wma_mgmt_tx_bundle_completion_handler(void *handle, uint8_t *buf,
 		}
 
 		wma_process_mgmt_tx_completion(wma_handle,
-					       desc_ids[i], status[i],
-					       INVALID_VDEV_ID, 0);
+					       desc_ids[i], status[i]);
 	}
 	return 0;
 }

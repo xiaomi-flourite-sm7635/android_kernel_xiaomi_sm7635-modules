@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt)	"%s: " fmt, __func__
@@ -34,6 +34,18 @@ static struct qts_data_entries *qts_data_entries;
 struct drm_panel *active_panel;
 
 static void qts_trusted_touch_abort_handler(struct qts_data *qts_data, int error);
+
+#if	(LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0))
+static inline struct spi_master *qts_get_spi_controller(struct spi_device *spi_dev)
+{
+	return spi_dev->master;
+}
+#else
+static inline struct spi_controller *qts_get_spi_controller(struct spi_device *spi_dev)
+{
+	return spi_dev->controller;
+}
+#endif
 
 static struct gh_acl_desc *qts_vm_get_acl(enum gh_vm_names vm_name)
 {
@@ -196,18 +208,10 @@ static int qts_populate_vm_info(struct qts_data *qts_data)
 	return 0;
 }
 
-static void qts_destroy_vm_info(struct qts_data *qts_data)
-{
-	kfree(qts_data->vm_info->iomem_sizes);
-	kfree(qts_data->vm_info->iomem_bases);
-	kfree(qts_data->vm_info);
-}
-
 static void qts_vm_deinit(struct qts_data *qts_data)
 {
 	if (qts_data->vm_info->mem_cookie)
 		gh_mem_notifier_unregister(qts_data->vm_info->mem_cookie);
-	qts_destroy_vm_info(qts_data);
 }
 
 static int qts_trusted_touch_get_vm_state(struct qts_data *qts_data)
@@ -282,11 +286,22 @@ void qts_trusted_touch_tvm_i2c_failure_report(struct qts_data *qts_data)
 static void qts_trusted_touch_reset_gpio_toggle(struct qts_data *qts_data)
 {
 	void __iomem *base;
+	struct resource res;
 
 	if (qts_data->bus_type != QTS_BUS_TYPE_I2C)
 		return;
 
-	base = ioremap(TOUCH_RESET_GPIO_BASE, TOUCH_RESET_GPIO_SIZE);
+	if (qts_data->reset_gpio <= 0) {
+		pr_err("%s reset gpio is not valid\n", __func__);
+		return;
+	}
+
+	if (!msm_gpio_get_pin_address(qts_data->reset_gpio, &res)) {
+		pr_err("Failed to retrieve gpio-%d resource\n", qts_data->reset_gpio);
+		return;
+	}
+
+	base = ioremap(res.start, TOUCH_RESET_GPIO_SIZE);
 	writel_relaxed(0x1, base + TOUCH_RESET_GPIO_OFFSET);
 	/* wait until toggle to finish*/
 	wmb();
@@ -301,29 +316,37 @@ static void qts_trusted_touch_intr_gpio_toggle(struct qts_data *qts_data,
 {
 	void __iomem *base;
 	u32 val;
+	struct resource res;
 
-	/*
-	 * Currently reset/irq gpios address is hardcoded in SVM. But reset/irq gpios
-	 * can be different based on target. This leads to NOC issues.
-	 * TODO: Add support to parse reset/irq gpio address from dtsi
-	 */
-	return;
+	if (qts_data->bus_type != QTS_BUS_TYPE_I2C)
+		return;
 
-	base = ioremap(TOUCH_INTR_GPIO_BASE, TOUCH_INTR_GPIO_SIZE);
+	if (qts_data->irq_gpio <= 0) {
+		pr_err("%s interrupt gpio is not valid\n", __func__);
+		return;
+	}
+
+	if (!msm_gpio_get_pin_address(qts_data->irq_gpio, &res)) {
+		pr_err("Failed to retrieve gpio-%d resource\n", qts_data->irq_gpio);
+		return;
+	}
+
+	base = ioremap(res.start, TOUCH_INTR_GPIO_SIZE);
 	if (!base) {
 		pr_err("Failed to get intr base!\n");
 		return;
 	}
 	val = readl_relaxed(base + TOUCH_INTR_GPIO_OFFSET);
+
 	if (enable) {
 		val |= BIT(0);
 		writel_relaxed(val, base + TOUCH_INTR_GPIO_OFFSET);
-		/* wait until toggle to finish*/
+		/* wait until toggle to finish */
 		wmb();
 	} else {
 		val &= ~BIT(0);
 		writel_relaxed(val, base + TOUCH_INTR_GPIO_OFFSET);
-		/* wait until toggle to finish*/
+		/* wait until toggle to finish */
 		wmb();
 	}
 	iounmap(base);
@@ -355,7 +378,7 @@ static int qts_vm_compare_sgl_desc(struct gh_sgl_desc *expected,
 
 		if ((left->ipa_base != right->ipa_base) ||
 				(left->size != right->size)) {
-			pr_err("sgl mismatch: left_base:%d right base:%d left size:%d right size:%d\n",
+			pr_err("sgl mismatch: left_base:%lld right base:%lld left size:%lld right size:%lld\n",
 				left->ipa_base, right->ipa_base, left->size, right->size);
 
 			return -EINVAL;
@@ -405,7 +428,7 @@ static void qts_trusted_touch_tvm_vm_mode_enable(struct qts_data *qts_data)
 
 	acl_desc = qts_vm_get_acl(GH_TRUSTED_VM);
 	if (IS_ERR(acl_desc)) {
-		pr_err("failed to populated acl data:rc=%d\n", PTR_ERR(acl_desc));
+		pr_err("failed to populated acl data:rc=%ld\n", PTR_ERR(acl_desc));
 		goto accept_fail;
 	}
 
@@ -417,7 +440,7 @@ static void qts_trusted_touch_tvm_vm_mode_enable(struct qts_data *qts_data)
 			GH_RM_MEM_ACCEPT_DONE,  TRUSTED_TOUCH_MEM_LABEL,
 			acl_desc, NULL, NULL, 0);
 	if (IS_ERR_OR_NULL(sgl_desc)) {
-		pr_err("failed to do mem accept :rc=%d\n", PTR_ERR(sgl_desc));
+		pr_err("failed to do mem accept :rc=%ld\n", PTR_ERR(sgl_desc));
 		goto acl_fail;
 	}
 	qts_trusted_touch_set_vm_state(qts_data, TVM_IOMEM_ACCEPTED);
@@ -426,7 +449,7 @@ static void qts_trusted_touch_tvm_vm_mode_enable(struct qts_data *qts_data)
 	if (qts_data->bus_type == QTS_BUS_TYPE_I2C)
 		rc = pm_runtime_get_sync(qts_data->client->adapter->dev.parent);
 	else
-		rc = pm_runtime_get_sync(qts_data->spi->master->dev.parent);
+		rc = pm_runtime_get_sync(qts_get_spi_controller(qts_data->spi)->dev.parent);
 
 	if (rc < 0) {
 		pr_err("failed to get sync rc:%d\n", rc);
@@ -611,7 +634,7 @@ static void qts_trusted_touch_tvm_vm_mode_disable(struct qts_data *qts_data)
 	if (qts_data->bus_type == QTS_BUS_TYPE_I2C)
 		pm_runtime_put_sync(qts_data->client->adapter->dev.parent);
 	else
-		pm_runtime_put_sync(qts_data->spi->master->dev.parent);
+		pm_runtime_put_sync(qts_get_spi_controller(qts_data->spi)->dev.parent);
 
 	qts_trusted_touch_set_vm_state(qts_data, TVM_I2C_SESSION_RELEASED);
 	rc = qts_vm_mem_release(qts_data);
@@ -670,7 +693,7 @@ static int qts_handle_trusted_touch_tvm(struct qts_data *qts_data, int value)
 		break;
 
 	default:
-		pr_err("unsupported value: %lu\n", value);
+		pr_err("unsupported value: %d\n", value);
 		err = -EINVAL;
 		break;
 	}
@@ -707,7 +730,7 @@ static void qts_trusted_touch_abort_tvm(struct qts_data *qts_data)
 		if (qts_data->bus_type == QTS_BUS_TYPE_I2C)
 			pm_runtime_put_sync(qts_data->client->adapter->dev.parent);
 		else
-			pm_runtime_put_sync(qts_data->spi->master->dev.parent);
+			pm_runtime_put_sync(qts_get_spi_controller(qts_data->spi)->dev.parent);
 		fallthrough;
 	case TVM_I2C_SESSION_RELEASED:
 		rc = qts_vm_mem_release(qts_data);
@@ -830,7 +853,7 @@ static int qts_bus_get(struct qts_data *qts_data)
 	if (qts_data->bus_type == QTS_BUS_TYPE_I2C)
 		dev = qts_data->client->adapter->dev.parent;
 	else
-		dev = qts_data->spi->master->dev.parent;
+		dev = qts_get_spi_controller(qts_data->spi)->dev.parent;
 
 	mutex_lock(&qts_data->qts_clk_io_ctrl_mutex);
 	rc = pm_runtime_get_sync(dev);
@@ -852,7 +875,7 @@ static void qts_bus_put(struct qts_data *qts_data)
 	if (qts_data->bus_type == QTS_BUS_TYPE_I2C)
 		dev = qts_data->client->adapter->dev.parent;
 	else
-		dev = qts_data->spi->master->dev.parent;
+		dev = qts_get_spi_controller(qts_data->spi)->dev.parent;
 
 	mutex_lock(&qts_data->qts_clk_io_ctrl_mutex);
 	if (qts_data->core_clk != NULL && qts_data->iface_clk != NULL)
@@ -1066,16 +1089,10 @@ static int qts_trusted_touch_pvm_vm_mode_enable(struct qts_data *qts_data)
 {
 	int rc = 0;
 	struct trusted_touch_vm_info *vm_info = qts_data->vm_info;
+	int lend_irq;
 
 	atomic_set(&qts_data->trusted_touch_transition, 1);
 	mutex_lock(&qts_data->transition_lock);
-
-	if (qts_data->suspended) {
-		pr_err("Invalid power state for operation\n");
-		atomic_set(&qts_data->trusted_touch_transition, 0);
-		rc =  -EPERM;
-		goto error;
-	}
 
 	if (qts_data->vendor_ops.pre_la_tui_enable)
 		qts_data->vendor_ops.pre_la_tui_enable(qts_data->vendor_data);
@@ -1106,8 +1123,36 @@ static int qts_trusted_touch_pvm_vm_mode_enable(struct qts_data *qts_data)
 		atomic_set(&qts_data->delayed_tvm_probe_pending, 0);
 	}
 
+#if IS_ENABLED(CONFIG_MPM_LEGACY)
+	struct irq_data *irqd;
+	int dir_conn_irq = 0;
+
+	dir_conn_irq =  msm_gpio_get_dir_conn_irq(qts_data->irq);
+	pr_info("gpio_irq=%d dir_conn_irq=%d\n", qts_data->irq, dir_conn_irq);
+	if (dir_conn_irq < 0) {
+		pr_err("something wrong\n");
+		goto abort_handler;
+	}
+
+	irqd = irq_get_irq_data(dir_conn_irq);
+	if (!irqd) {
+		pr_err("Invalid irq data for dir_conn_irq\n");
+		goto abort_handler;
+	}
+	if (!irqd->hwirq) {
+		pr_err("Invalid hwirq in irq data\n");
+		goto abort_handler;
+	}
+	if (irqd->hwirq != qts_data->vm_info->hw_irq) {
+		pr_err("expected %d received %lu\n", qts_data->vm_info->hw_irq, irqd->hwirq);
+		goto abort_handler;
+	}
+	lend_irq = dir_conn_irq;
+#else
+	lend_irq = qts_data->irq;
+#endif
 	rc = gh_irq_lend_v2(vm_info->irq_label, vm_info->vm_name,
-		qts_data->irq, &qts_vm_irq_on_release_callback, qts_data);
+		lend_irq, &qts_vm_irq_on_release_callback, qts_data);
 	if (rc) {
 		pr_err("Failed to lend irq\n");
 		goto abort_handler;
@@ -1174,7 +1219,7 @@ static int qts_handle_trusted_touch_pvm(struct qts_data *qts_data, int value)
 		break;
 
 	default:
-		pr_err("unsupported value: %lu\n", value);
+		pr_err("unsupported value: %d\n", value);
 		err = -EINVAL;
 		break;
 	}
@@ -1385,7 +1430,7 @@ static ssize_t trusted_touch_enable_store(struct kobject *kobj, struct kobj_attr
 	if (!atomic_read(&qts_data->trusted_touch_initialized))
 		return -EIO;
 
-	pr_info("TUI trusted_touch_enable:%d\n", value);
+	pr_info("TUI trusted_touch_enable:%lu\n", value);
 
 #ifdef CONFIG_ARCH_QTI_VM
 	err = qts_handle_trusted_touch_tvm(qts_data, value);
@@ -1460,13 +1505,18 @@ static ssize_t trusted_touch_device_path_show(struct kobject *kobj,
 	struct qts_data *qts_data;
 	char *path = NULL;
 	u32 idx = qts_ts_is_primary(kobj) ? 0 : 1;
+	int ret;
 
 	qts_data = &qts_data_entries->info[idx];
 
 	if (qts_data && qts_data->dev)
 		path = kobject_get_path(&qts_data->dev->kobj, GFP_KERNEL);
 
-	return scnprintf(buf, PAGE_SIZE, "%s", path ? path : "");
+	ret = scnprintf(buf, PAGE_SIZE, "%s", path ? path : "");
+
+	kfree(path);
+
+	return ret;
 }
 
 static struct kobj_attribute trusted_touch_enable_attr =
@@ -1753,12 +1803,12 @@ static void qts_ts_register_for_panel_events(struct qts_data *qts_data)
 		return;
 	}
 
-	pr_debug("registered for panel notifications panel: 0x%x\n", qts_data->panel);
+	pr_debug("registered for panel notifications panel: 0x%pK\n", qts_data->panel);
 
 	qts_data->notifier_cookie = cookie;
 }
 
-int qts_client_register(struct qts_vendor_data qts_vendor_data)
+int qts_client_register(struct qts_vendor_data *qts_vendor_data)
 {
 	struct qts_data *qts_data;
 	struct device_node *dp;
@@ -1781,10 +1831,10 @@ int qts_client_register(struct qts_vendor_data qts_vendor_data)
 
 	mutex_lock(&qts_data_entries->qts_data_entries_lock);
 
-	if (qts_vendor_data.bus_type == QTS_BUS_TYPE_I2C)
-		dp = qts_vendor_data.client->dev.of_node;
+	if (qts_vendor_data->bus_type == QTS_BUS_TYPE_I2C)
+		dp = qts_vendor_data->client->dev.of_node;
 	else
-		dp = qts_vendor_data.spi->dev.of_node;
+		dp = qts_vendor_data->spi->dev.of_node;
 
 	rc = qts_ts_check_dt(dp);
 	if (rc) {
@@ -1793,27 +1843,29 @@ int qts_client_register(struct qts_vendor_data qts_vendor_data)
 	}
 
 	pr_debug("QTS client register starts\n");
-	qts_data = &qts_data_entries->info[qts_vendor_data.client_type];
+	qts_data = &qts_data_entries->info[qts_vendor_data->client_type];
 
-	qts_data->client = qts_vendor_data.client;
-	qts_data->spi = qts_vendor_data.spi;
+	qts_data->client = qts_vendor_data->client;
+	qts_data->spi = qts_vendor_data->spi;
 
-	if (qts_vendor_data.bus_type == QTS_BUS_TYPE_I2C)
+	if (qts_vendor_data->bus_type == QTS_BUS_TYPE_I2C)
 		qts_data->dev = &qts_data->client->dev;
 	else
 		qts_data->dev = &qts_data->spi->dev;
 
-	qts_data->bus_type = qts_vendor_data.bus_type;
-	qts_data->client_type = qts_vendor_data.client_type;
+	qts_data->bus_type = qts_vendor_data->bus_type;
+	qts_data->client_type = qts_vendor_data->client_type;
 	qts_data->dp = dp;
-	qts_data->vendor_data = qts_vendor_data.vendor_data;
+	qts_data->vendor_data = qts_vendor_data->vendor_data;
 	qts_data->panel = active_panel;
-	qts_data->vendor_ops = qts_vendor_data.qts_vendor_ops;
-	qts_data->schedule_suspend = qts_vendor_data.schedule_suspend;
-	qts_data->schedule_resume = qts_vendor_data.schedule_resume;
+	qts_data->vendor_ops = qts_vendor_data->qts_vendor_ops;
+	qts_data->schedule_suspend = qts_vendor_data->schedule_suspend;
+	qts_data->schedule_resume = qts_vendor_data->schedule_resume;
 	qts_data->suspended = true;
+	qts_data->irq_gpio = qts_vendor_data->irq_gpio;
+	qts_data->reset_gpio = qts_vendor_data->reset_gpio;
 
-	qts_adjust_irq_flags(qts_vendor_data.irq_gpio_flags,
+	qts_adjust_irq_flags(qts_vendor_data->irq_gpio_flags,
 		&qts_data->irq_gpio_flags, &qts_data->irq_accept_flags);
 
 	qts_trusted_touch_init(qts_data);
@@ -1824,7 +1876,7 @@ int qts_client_register(struct qts_vendor_data qts_vendor_data)
 
 	mutex_init(&qts_data->transition_lock);
 	qts_ts_register_for_panel_events(qts_data);
-	qts_vendor_data.notifier_cookie = qts_data->notifier_cookie;
+	qts_vendor_data->notifier_cookie = qts_data->notifier_cookie;
 
 #ifdef CONFIG_ARCH_QTI_VM
 	atomic_set(&qts_data->delayed_tvm_probe_pending, 1);
@@ -1855,7 +1907,6 @@ EXPORT_SYMBOL(qts_client_register);
 void qts_client_unregister(void)
 {
 	struct qts_data *qts_data;
-	int i;
 
 	pr_debug("QTS client unregister\n");
 	if (!qts_data_entries)
@@ -1866,7 +1917,7 @@ void qts_client_unregister(void)
 		qts_data_entries->qts_kset = NULL;
 	}
 
-	for (i = QTS_CLIENT_PRIMARY_TOUCH; i < QTS_CLIENT_MAX; i++) {
+	for (int i = QTS_CLIENT_PRIMARY_TOUCH; i < QTS_CLIENT_MAX; i++) {
 		qts_data = &qts_data_entries->info[i];
 		if (!IS_ERR_OR_NULL(qts_data->notifier_cookie))
 			panel_event_notifier_unregister(qts_data->notifier_cookie);

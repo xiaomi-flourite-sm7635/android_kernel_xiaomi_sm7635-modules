@@ -103,6 +103,7 @@ driver_includes = [
     "drivers/cam_sensor_module/cam_sensor",
     "drivers/cam_sensor_module/cam_sensor_io",
     "drivers/cam_sensor_module/cam_sensor_utils",
+    "drivers/cam_sensor_module/cam_aperture",
     "drivers/cam_sensor_module/cam_tpg",
     "drivers/cam_sensor_module/cam_tpg/tpg_hw",
     "drivers/cam_sensor_module/cam_tpg/tpg_hw/tpg_hw_v_1_0",
@@ -128,6 +129,24 @@ ddk_headers(
         ":camera_src_headers",
         ":camera_uapi_headers",
     ],
+)
+
+genrule(
+    name = "camera_banner_header",
+    srcs = [],
+    outs = ["cam_generated.h"],
+    cmd = """
+      {
+        printf '#define CAMERA_COMPILE_TIME "%s"\n' "$$(date)"
+        printf '#define CAMERA_COMPILE_BY "%s"\n' "$$(whoami)"
+        printf '#define CAMERA_COMPILE_HOST "%s"\n' "$$(uname -n)"
+      } > "$@"
+    """
+)
+
+ddk_headers(
+    name = "camera_banner",
+    hdrs = [":camera_banner_header"],
 )
 
 load(":camera_modules.bzl", "define_camera_module")

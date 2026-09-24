@@ -4,6 +4,8 @@
  * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#define DEBUG
+
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_device.h>
@@ -418,6 +420,7 @@ int msm_common_snd_hw_params(struct snd_pcm_substream *substream,
 		if (atomic_read(&pdata->lpass_intf_clk_ref_cnt[index]) == 0) {
 			if ((strnstr(stream_name, "TDM", strlen(stream_name)))) {
 				slots = pdata->tdm_max_slots;
+				
 				rate = params_rate(params);
 
 				ret = get_tdm_clk_id(index);

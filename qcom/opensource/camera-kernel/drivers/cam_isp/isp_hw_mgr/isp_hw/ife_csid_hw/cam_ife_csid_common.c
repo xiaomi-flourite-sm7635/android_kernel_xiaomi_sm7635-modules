@@ -28,6 +28,31 @@
 /* factor to conver qtime to boottime */
 int64_t qtime_to_boottime;
 
+/* xiaomi add mipi_error_flag begin */
+static int ife_mipi_error_flag_cnt  = 6;
+static int ife_crc_error_cnt = 0;
+static long ife_mipi_error_flag[6] = {0, 0, 0, 0, 0, 0};
+module_param_array(ife_mipi_error_flag, long, &ife_mipi_error_flag_cnt, 0644);
+module_param(ife_crc_error_cnt, int, 0644);
+
+void count_ife_mipi_error(uint32_t res_type)
+{
+	struct timespec64   timestamp;
+	uint32_t            phy_id = 0;
+	if (res_type < ife_mipi_error_flag_cnt + 0x4001 && res_type >= 0x4001)
+	{
+		phy_id = res_type - 0x4001;
+		CAM_GET_TIMESTAMP(timestamp);
+		ife_mipi_error_flag[phy_id] = timestamp.tv_sec;
+		ife_crc_error_cnt++;
+		ife_crc_error_cnt=ife_crc_error_cnt%65535;
+		CAM_ERR(CAM_ISP, "ife set mipi error flag: phy_id: %d, timestamp: sec: %ld, nsec: %ld,crc_error_cnt:%d",
+				phy_id, timestamp.tv_sec, timestamp.tv_nsec,ife_crc_error_cnt);
+	}
+}
+
+/* xiaomi add mipi_error_flag end */
+
 const uint8_t *cam_ife_csid_irq_reg_tag[CAM_IFE_CSID_IRQ_REG_MAX] = {
 	"TOP",
 	"RX",

@@ -256,8 +256,28 @@ enum wlan_epcs_frame {
 
 #define CFG_OEM_EHT_MLO_CRYPTO_BITMAP_SUPPORTED \
 			CFG(CFG_OEM_EHT_MLO_CRYPTO_BITMAP)
+
+/*
+ * eht_mlo_crypto_open_allow - Eht allow open crypto connection
+ * @Min: 0x0
+ * @Max: 0x1
+ * @Default: 0x0 - Eht disallow open crypto connection
+ *
+ * This INI is used to control eht connection if allow open crypto
+ */
+#define CFG_EHT_MLO_CRYPTO_OPEN_ALLOW CFG_INI_UINT( \
+		"eht_mlo_crypto_open_allow", \
+		0x0, \
+		0x1, \
+		0x0, \
+		CFG_VALUE_OR_DEFAULT, \
+		"Eht allow open crypto connection")
+
+#define CFG_EHT_MLO_CRYPTO_OPEN_ALLOW_SUPPORTED \
+			CFG(CFG_EHT_MLO_CRYPTO_OPEN_ALLOW)
 #else
 #define CFG_OEM_EHT_MLO_CRYPTO_BITMAP_SUPPORTED
+#define CFG_EHT_MLO_CRYPTO_OPEN_ALLOW_SUPPORTED
 #endif
 
 /*
@@ -1262,6 +1282,7 @@ enum wlan_epcs_frame {
 	CFG(CFG_PMF_SA_QUERY_MAX_RETRIES) \
 	CFG(CFG_PMF_SA_QUERY_RETRY_INTERVAL) \
 	CFG_OEM_EHT_MLO_CRYPTO_BITMAP_SUPPORTED \
+        CFG_EHT_MLO_CRYPTO_OPEN_ALLOW_SUPPORTED \
 	CFG(CFG_ENABLE_RTT_MAC_RANDOMIZATION) \
 	CFG(CFG_RTT3_ENABLE) \
 	CFG(CFG_11H_SUPPORT_ENABLED) \

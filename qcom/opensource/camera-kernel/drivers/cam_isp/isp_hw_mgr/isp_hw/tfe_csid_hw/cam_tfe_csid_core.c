@@ -24,13 +24,37 @@
 #include "cam_tfe_csid_hw_intf.h"
 #include <dt-bindings/msm-camera.h>
 #include "cam_cpas_hw_intf.h"
+/* xiaomi add for mipi phy backup setting begin*/
+#include "cam_csiphy_core.h"
+#include "cam_context.h"
+/* xiaomi add for mipi phy backup setting end*/
+
+/* xiaomi add mipi_error_flag begin */
+static int crc_error_cnt = 0;
+module_param(crc_error_cnt, int, 0644);
+
+void count_mipi_error(void)
+{
+	struct timespec64   timestamp;
+
+	CAM_GET_TIMESTAMP(timestamp);
+	crc_error_cnt++;
+	crc_error_cnt = crc_error_cnt % 65535;
+	CAM_ERR(CAM_ISP,
+		"tfe set mipi error flag: timestamp: sec: %ld, nsec: %ld, crc_error_cnt:%d",
+		timestamp.tv_sec, timestamp.tv_nsec, crc_error_cnt);
+}
+/* xiaomi add mipi_error_flag end */
+
+static int trigger_backupeq = 0;
+module_param(trigger_backupeq, int, 0644);
 
 /* Timeout value in msec */
 #define TFE_CSID_TIMEOUT                               1000
 
 /* Timeout values in usec */
 #define CAM_TFE_CSID_TIMEOUT_SLEEP_US                  1000
-#define CAM_TFE_CSID_TIMEOUT_ALL_US                    100000
+#define CAM_TFE_CSID_TIMEOUT_ALL_US                    10000
 
 /*
  * Constant Factors needed to change QTimer ticks to nanoseconds
@@ -46,6 +70,7 @@
 
 /* Max CSI Rx irq error count threshold value */
 #define CAM_TFE_CSID_MAX_IRQ_ERROR_COUNT               5
+#define CAM_TFE_CSID_MAX_IRQ_CRC_ERROR_COUNT 	       100
 
 static int cam_tfe_csid_is_ipp_ppp_format_supported(
 	uint32_t in_format)
@@ -556,6 +581,7 @@ static int cam_tfe_csid_global_reset(struct cam_tfe_csid_hw *csid_hw)
 		CAM_ERR(CAM_ISP, "CSID:%d IRQ value after reset rc = %d",
 			csid_hw->hw_intf->hw_idx, val);
 	csid_hw->error_irq_count = 0;
+	csid_hw->crc_error_irq_count = 0;
 	csid_hw->prev_boot_timestamp = 0;
 
 	if (csid_hw->pxl_pipe_enable) {
@@ -1343,6 +1369,7 @@ static int cam_tfe_csid_enable_hw(struct cam_tfe_csid_hw  *csid_hw)
 	csid_hw->fatal_err_detected = false;
 	csid_hw->device_enabled = 1;
 	spin_unlock_irqrestore(&csid_hw->spin_lock, flags);
+	cam_tasklet_start(csid_hw->tasklet);
 
 	if (csid_hw->pxl_pipe_enable ) {
 		path_data = (struct cam_tfe_csid_path_cfg  *)
@@ -1414,6 +1441,8 @@ static int cam_tfe_csid_disable_hw(struct cam_tfe_csid_hw *csid_hw)
 	cam_io_w_mb(0, soc_info->reg_map[0].mem_base +
 		csid_reg->cmn_reg->csid_top_irq_mask_addr);
 
+	cam_tasklet_stop(csid_hw->tasklet);
+
 	rc = cam_tfe_csid_disable_soc_resources(soc_info);
 	if (rc)
 		CAM_ERR(CAM_ISP, "CSID:%d Disable CSID SOC failed",
@@ -1424,6 +1453,7 @@ static int cam_tfe_csid_disable_hw(struct cam_tfe_csid_hw *csid_hw)
 	spin_unlock_irqrestore(&csid_hw->spin_lock, flags);
 	csid_hw->hw_info->hw_state = CAM_HW_STATE_POWER_DOWN;
 	csid_hw->error_irq_count = 0;
+	csid_hw->crc_error_irq_count = 0;
 	csid_hw->prev_boot_timestamp = 0;
 
 	return rc;
@@ -3206,7 +3236,7 @@ static int cam_tfe_csid_stop(void *hw_priv,
 				cam_io_w_mb(val, mem_base + pxl_reg->csid_pxl_cfg0_addr);
 			} else
 				continue;
-			break;
+                        break;
 		default:
 			CAM_DBG(CAM_ISP, "CSID:%d Invalid res type%d",
 				csid_hw->hw_intf->hw_idx,
@@ -3969,6 +3999,10 @@ irqreturn_t cam_tfe_csid_irq(int irq_num, void *data)
 	uint32_t data_idx;
 	uint32_t report_err_type = CAM_ISP_HW_ERROR_NONE;
 
+	/* xiaomi add for mipi phy backup setting begin*/
+	u8 phy_index = 0;
+	/* xiaomi add for mipi phy backup setting end*/
+
 	if (!data) {
 		CAM_ERR(CAM_ISP, "CSID: Invalid arguments");
 		return IRQ_HANDLED;
@@ -4046,23 +4080,35 @@ irqreturn_t cam_tfe_csid_irq(int irq_num, void *data)
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
 			TFE_CSID_CSI2_RX_ERROR_LANE0_FIFO_OVERFLOW) {
 			fatal_err_detected = true;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
 			goto handle_fatal_error;
 		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
 			TFE_CSID_CSI2_RX_ERROR_LANE1_FIFO_OVERFLOW) {
 			fatal_err_detected = true;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
 			goto handle_fatal_error;
 		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
 			TFE_CSID_CSI2_RX_ERROR_LANE2_FIFO_OVERFLOW) {
 			fatal_err_detected = true;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
 			goto handle_fatal_error;
 		}
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
 			TFE_CSID_CSI2_RX_ERROR_LANE3_FIFO_OVERFLOW) {
 			fatal_err_detected = true;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
 			goto handle_fatal_error;
 		}
 
@@ -4074,45 +4120,86 @@ irqreturn_t cam_tfe_csid_irq(int irq_num, void *data)
 					csid_hw->hw_intf->hw_idx,
 					(csid_hw->csi2_rx_cfg.lane_type) ? "cphy" : "dphy",
 					csid_hw->csi2_rx_cfg.lane_type);
-			else
+			else {
 				csid_hw->error_irq_count++;
+/* xiaomi add mipi_error_flag begin */
+				count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+			}
 		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
-			TFE_CSID_CSI2_RX_ERROR_CPHY_SOT_RECEPTION)
+			TFE_CSID_CSI2_RX_ERROR_CPHY_SOT_RECEPTION) {
 			csid_hw->error_irq_count++;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
-			TFE_CSID_CSI2_RX_ERROR_STREAM_UNDERFLOW)
+			TFE_CSID_CSI2_RX_ERROR_STREAM_UNDERFLOW) {
 			csid_hw->error_irq_count++;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
-			TFE_CSID_CSI2_RX_ERROR_UNBOUNDED_FRAME)
+			TFE_CSID_CSI2_RX_ERROR_UNBOUNDED_FRAME) {
 			csid_hw->error_irq_count++;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
-			TFE_CSID_CSI2_RX_ERROR_CRC)
-			is_error_irq = true;
+			TFE_CSID_CSI2_RX_ERROR_CRC) {
+			csid_hw->crc_error_irq_count++;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
-			TFE_CSID_CSI2_RX_ERROR_ECC)
+			TFE_CSID_CSI2_RX_ERROR_ECC) {
 			is_error_irq = true;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+		}
 
 		if (irq_status[TFE_CSID_IRQ_REG_RX] &
-			TFE_CSID_CSI2_RX_ERROR_MMAPPED_VC_DT)
+			TFE_CSID_CSI2_RX_ERROR_MMAPPED_VC_DT) {
 			is_error_irq = true;
+/* xiaomi add mipi_error_flag begin */
+			count_mipi_error();
+/* xiaomi add mipi_error_flag begin */
+		}
 
 	}
 handle_fatal_error:
 	spin_unlock_irqrestore(&csid_hw->spin_lock, flags);
 
-	if (csid_hw->error_irq_count || fatal_err_detected)
+	if (csid_hw->error_irq_count || csid_hw->crc_error_irq_count || fatal_err_detected)
 		is_error_irq = true;
 
 	if (csid_hw->error_irq_count >
 		CAM_TFE_CSID_MAX_IRQ_ERROR_COUNT) {
 		fatal_err_detected = true;
 		csid_hw->error_irq_count = 0;
+	}
+
+	if (csid_hw->crc_error_irq_count >
+		CAM_TFE_CSID_MAX_IRQ_CRC_ERROR_COUNT) {
+		fatal_err_detected = true;
+		csid_hw->crc_error_irq_count = 0;
+		/* xiaomi add for mipi phy backup setting begin*/
+		phy_index = csid_hw->in_res_id - CAM_ISP_TFE_IN_RES_PHY_0;
+		CAM_ERR(CAM_ISP, "PHY_CRC_ERROR phy_index[%d]", phy_index);
+		soc_info->phy_cfg_current_index[phy_index] = 1;
+		XM_MIPI_KMD_SET_CTRL_FLAG_VAL(phy_index, soc_info->phy_cfg_current_index[phy_index]);
+		trigger_backupeq = 1;
+		/* xiaomi add for mipi phy backup setting end*/
 	}
 
 	if (fatal_err_detected) {
@@ -4715,6 +4802,7 @@ int cam_tfe_csid_hw_probe_init(struct cam_hw_intf  *csid_hw_intf,
 
 	tfe_csid_hw->csid_debug = 0;
 	tfe_csid_hw->error_irq_count = 0;
+	tfe_csid_hw->crc_error_irq_count = 0;
 	tfe_csid_hw->prev_boot_timestamp = 0;
 
 	rc = cam_tfe_csid_disable_soc_resources(

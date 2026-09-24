@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -891,7 +891,17 @@ QDF_STATUS wlan_mlme_cfg_get_enable_ul_ofdm(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
-uint16_t wlan_mlme_get_min_he_mcs_map(uint16_t val1, uint16_t val2)
+/* mlme_get_min_rate_cap() - get minimum capability for HE-MCS between
+ *                           ini value and fw capability.
+ *
+ * Rx HE-MCS Map and Tx HE-MCS Map subfields format where 2-bit indicates
+ * 0 indicates support for HE-MCS 0-7 for n spatial streams
+ * 1 indicates support for HE-MCS 0-9 for n spatial streams
+ * 2 indicates support for HE-MCS 0-11 for n spatial streams
+ * 3 indicates that n spatial streams is not supported for HE PPDUs
+ *
+ */
+static uint16_t mlme_get_min_rate_cap(uint16_t val1, uint16_t val2)
 {
 	uint16_t ret = 0, i;
 
@@ -1174,10 +1184,10 @@ QDF_STATUS mlme_update_tgt_he_caps_in_cfg(struct wlan_objmgr_psoc *psoc,
 	mlme_obj->cfg.he_caps.dot11_he_cap.rx_full_bw_su_he_mu_non_cmpr_sigb =
 				he_cap->rx_full_bw_su_he_mu_non_cmpr_sigb;
 
-	tx_mcs_map = wlan_mlme_get_min_he_mcs_map(
+	tx_mcs_map = mlme_get_min_rate_cap(
 		mlme_obj->cfg.he_caps.dot11_he_cap.tx_he_mcs_map_lt_80,
 		he_cap->tx_he_mcs_map_lt_80);
-	rx_mcs_map = wlan_mlme_get_min_he_mcs_map(
+	rx_mcs_map = mlme_get_min_rate_cap(
 		mlme_obj->cfg.he_caps.dot11_he_cap.rx_he_mcs_map_lt_80,
 		he_cap->rx_he_mcs_map_lt_80);
 	if (!mlme_obj->cfg.vht_caps.vht_cap_info.enable2x2) {
@@ -1192,11 +1202,10 @@ QDF_STATUS mlme_update_tgt_he_caps_in_cfg(struct wlan_objmgr_psoc *psoc,
 	if (cfg_in_range(CFG_HE_TX_MCS_MAP_LT_80, tx_mcs_map))
 		mlme_obj->cfg.he_caps.dot11_he_cap.tx_he_mcs_map_lt_80 =
 			tx_mcs_map;
-
-	tx_mcs_map = wlan_mlme_get_min_he_mcs_map(
+	tx_mcs_map = mlme_get_min_rate_cap(
 	   *((uint16_t *)mlme_obj->cfg.he_caps.dot11_he_cap.tx_he_mcs_map_160),
 	   *((uint16_t *)he_cap->tx_he_mcs_map_160));
-	rx_mcs_map = wlan_mlme_get_min_he_mcs_map(
+	rx_mcs_map = mlme_get_min_rate_cap(
 	   *((uint16_t *)mlme_obj->cfg.he_caps.dot11_he_cap.rx_he_mcs_map_160),
 	   *((uint16_t *)he_cap->rx_he_mcs_map_160));
 
@@ -1497,8 +1506,7 @@ enum phy_ch_width wlan_mlme_get_max_bw(void)
 #endif
 
 QDF_STATUS wlan_mlme_get_sta_ch_width(struct wlan_objmgr_vdev *vdev,
-				      enum phy_ch_width *ch_width,
-				      enum wlan_phymode *phy_mode)
+				      enum phy_ch_width *ch_width)
 {
 	QDF_STATUS status = QDF_STATUS_E_INVAL;
 	struct wlan_objmgr_peer *peer;
@@ -1515,8 +1523,6 @@ QDF_STATUS wlan_mlme_get_sta_ch_width(struct wlan_objmgr_vdev *vdev,
 		phymode = wlan_peer_get_phymode(peer);
 		wlan_peer_obj_unlock(peer);
 		*ch_width = wlan_mlme_get_ch_width_from_phymode(phymode);
-		if (phy_mode)
-			*phy_mode = phymode;
 		status = QDF_STATUS_SUCCESS;
 	}
 
@@ -3512,16 +3518,6 @@ QDF_STATUS wlan_mlme_set_enable_bcast_probe_rsp(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
-bool wlan_mlme_get_enable_bcast_probe_rsp(struct wlan_objmgr_psoc *psoc)
-{
-	struct wlan_mlme_psoc_ext_obj *mlme_obj = mlme_get_psoc_ext_obj(psoc);
-
-	if (!mlme_obj)
-		return false;
-
-	return mlme_obj->cfg.oce.enable_bcast_probe_rsp;
-}
-
 QDF_STATUS
 wlan_mlme_get_sta_miracast_mcc_rest_time(struct wlan_objmgr_psoc *psoc,
 					 uint32_t *value)
@@ -3788,7 +3784,7 @@ QDF_STATUS mlme_get_wep_key(struct wlan_objmgr_vdev *vdev,
 		mlme_legacy_err("Incorrect wep key index %d", wep_keyid);
 		return QDF_STATUS_E_INVAL;
 	}
-	crypto_key = wlan_crypto_get_key(vdev, NULL, wep_keyid);
+	crypto_key = wlan_crypto_get_key(vdev, wep_keyid);
 	if (!crypto_key) {
 		mlme_legacy_err("Crypto KEY not present");
 		return QDF_STATUS_E_INVAL;
@@ -4899,6 +4895,18 @@ QDF_STATUS wlan_mlme_get_oem_eht_mlo_config(struct wlan_objmgr_psoc *psoc,
 
 	return QDF_STATUS_SUCCESS;
 }
+
+QDF_STATUS wlan_mlme_get_eht_mlo_crypto_config(struct wlan_objmgr_psoc *psoc,
+						uint32_t *eht_mlo_crypto_cfg)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj)
+		return QDF_STATUS_E_FAILURE;
+	*eht_mlo_crypto_cfg = mlme_obj->cfg.gen.eht_mlo_crypto_open_allow;
+
+	return QDF_STATUS_SUCCESS;
+}
 #endif
 
 QDF_STATUS wlan_mlme_is_sap_uapsd_enabled(struct wlan_objmgr_psoc *psoc,
@@ -5438,16 +5446,6 @@ char *mlme_get_roam_fail_reason_str(enum wlan_roam_failure_reason_code result)
 		return "No Candidate AP found on final BMISS";
 	case ROAM_FAIL_REASON_CURR_AP_STILL_OK:
 		return "CURRENT AP STILL OK";
-	case ROAM_FAIL_REASON_SCAN_CANCEL:
-		return "SCAN CANCEL";
-	case ROAM_FAIL_REASON_SCREEN_ACTIVITY:
-		return "SCREEN ACTIVITY";
-	case ROAM_FAIL_REASON_OTHER_PRIORITY_ROAM_SCAN:
-		return "OTHER PRIORITY ROAM SCAN";
-	case ROAM_FAIL_REASON_REASSOC_TO_SAME_AP:
-		return "REASSOC TO SAME AP";
-	case ROAM_FAIL_REASON_MLD_EXTRA_SCAN_REQUIRED:
-		return "MLD EXTRA SCAN REQUIRED";
 	default:
 		return "UNKNOWN";
 	}
@@ -6207,22 +6205,6 @@ wlan_mlme_get_bss_load_threshold(struct wlan_objmgr_psoc *psoc, uint32_t *val)
 	}
 
 	*val = mlme_obj->cfg.lfr.bss_load_trig.threshold;
-
-	return QDF_STATUS_SUCCESS;
-}
-
-QDF_STATUS
-wlan_mlme_get_bss_load_alpha(struct wlan_objmgr_psoc *psoc, uint32_t *val)
-{
-	struct wlan_mlme_psoc_ext_obj *mlme_obj;
-
-	mlme_obj = mlme_get_psoc_ext_obj(psoc);
-	if (!mlme_obj) {
-		*val = cfg_default(CFG_BSS_LOAD_ALPHA);
-		return QDF_STATUS_E_INVAL;
-	}
-
-	*val = mlme_obj->cfg.lfr.bss_load_trig.bss_load_alpha;
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -8461,56 +8443,4 @@ uint16_t wlan_mlme_get_keepalive_period(struct wlan_objmgr_vdev *vdev)
 	}
 
 	return mlme_priv->keep_alive_period;
-}
-
-void wlan_mlme_reset_sta_keepalive_period(struct wlan_objmgr_psoc *psoc,
-					  struct wlan_objmgr_vdev *vdev)
-{
-       struct mlme_legacy_priv *mlme_priv;
-       struct wlan_mlme_psoc_ext_obj *mlme_obj;
-
-       mlme_obj = mlme_get_psoc_ext_obj(psoc);
-       if (!mlme_obj) {
-	       mlme_err("invalid mlem object");
-	       return;
-       }
-       mlme_obj->cfg.sta.sta_keep_alive_period =
-		cfg_get(psoc, CFG_INFRA_STA_KEEP_ALIVE_PERIOD);
-       mlme_priv = wlan_vdev_mlme_get_ext_hdl(vdev);
-       if (!mlme_priv) {
-               mlme_err("vdev legacy private object is NULL");
-               return;
-       }
-
-       mlme_priv->keep_alive_period =
-			cfg_get(psoc, CFG_INFRA_STA_KEEP_ALIVE_PERIOD);
-}
-
-QDF_STATUS
-wlan_mlme_get_sta_keep_alive_period(struct wlan_objmgr_psoc *psoc,
-                                    uint32_t *keep_alive_period)
-{
-	struct wlan_mlme_psoc_ext_obj *mlme_obj;
-
-	mlme_obj = mlme_get_psoc_ext_obj(psoc);
-	if (!mlme_obj) {
-		*keep_alive_period =
-				cfg_default(CFG_INFRA_STA_KEEP_ALIVE_PERIOD);
-		return QDF_STATUS_E_INVAL;
-	}
-
-	*keep_alive_period = mlme_obj->cfg.sta.sta_keep_alive_period;
-
-        return QDF_STATUS_SUCCESS;
-}
-
-uint16_t wlan_mlme_get_sap_he_rx_mcs_map_160(struct wlan_objmgr_psoc *psoc)
-{
-	struct wlan_mlme_psoc_ext_obj *mlme_obj;
-
-	mlme_obj = mlme_get_psoc_ext_obj(psoc);
-	if (!mlme_obj)
-		return cfg_get(psoc, CFG_SAP_HE_RX_MCS_MAP_160);
-
-	return mlme_obj->cfg.sap_cfg.sap_he_rx_mcs_map_160;
 }

@@ -12,6 +12,10 @@
 #include "cam_tfe_csid_soc.h"
 #include "cam_csid_ppi_core.h"
 
+/* xiaomi add mipi_error_flag begin */
+void count_mipi_error(void);
+/* xiaomi add mipi_error_flag end */
+
 #define CAM_TFE_CSID_CID_MAX                          4
 
 /* Each word is taken as uint32_t, for dumping uint64_t count as 2 words
@@ -573,6 +577,7 @@ struct cam_tfe_csid_hw {
 	bool                                sof_irq_triggered;
 	uint32_t                            irq_debug_cnt;
 	uint32_t                            error_irq_count;
+	uint32_t                            crc_error_irq_count;
 	uint32_t                            device_enabled;
 	spinlock_t                          spin_lock;
 	bool                                fatal_err_detected;

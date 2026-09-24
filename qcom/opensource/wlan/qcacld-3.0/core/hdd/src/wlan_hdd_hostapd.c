@@ -25,6 +25,9 @@
 
 /* Include Files */
 
+#ifdef WLAN_FEATURE_OSRTP
+#include "xdp_sock_drv.h"
+#endif
 #include <linux/version.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -378,6 +381,15 @@ static void hdd_hostapd_channel_allow_suspend(struct hdd_adapter *adapter,
 	struct hdd_hostapd_state *hostapd_state =
 		WLAN_HDD_GET_HOSTAP_STATE_PTR(adapter->deflink);
 	struct sap_context *sap_ctx;
+	bool is_dfs;
+
+	hdd_debug("bss_state: %d, chan_freq: %d, dfs_ref_cnt: %d",
+		  hostapd_state->bss_state, chan_freq,
+		  atomic_read(&hdd_ctx->sap_dfs_ref_cnt));
+
+	/* Return if BSS is already stopped */
+	if (hostapd_state->bss_state == BSS_STOP)
+		return;
 
 	sap_ctx = WLAN_HDD_GET_SAP_CTX_PTR(adapter->deflink);
 	if (!sap_ctx) {
@@ -385,17 +397,10 @@ static void hdd_hostapd_channel_allow_suspend(struct hdd_adapter *adapter,
 		return;
 	}
 
-	hdd_debug("bss_state: %d, chan_freq: %d, dfs_ref_cnt: %d, is_dfs_wakelock_held %d",
-		  hostapd_state->bss_state, chan_freq,
-		  atomic_read(&hdd_ctx->sap_dfs_ref_cnt),
-		  sap_ctx->is_dfs_wakelock_held);
-
-	/* Return if BSS is already stopped */
-	if (hostapd_state->bss_state == BSS_STOP)
-		return;
-
-	hdd_debug("is_dfs_wakelock_held: %d", sap_ctx->is_dfs_wakelock_held);
-	if (!sap_ctx->is_dfs_wakelock_held)
+	is_dfs = wlan_mlme_check_chan_param_has_dfs(hdd_ctx->pdev,
+						    ch_params,
+						    chan_freq);
+	if (!is_dfs)
 		return;
 
 	/* Release wakelock when no more DFS channels are used */
@@ -406,8 +411,6 @@ static void hdd_hostapd_channel_allow_suspend(struct hdd_adapter *adapter,
 		qdf_runtime_pm_allow_suspend(&hdd_ctx->runtime_context.dfs);
 
 	}
-
-	sap_ctx->is_dfs_wakelock_held = false;
 }
 
 /**
@@ -430,21 +433,19 @@ static void hdd_hostapd_channel_prevent_suspend(struct hdd_adapter *adapter,
 	struct sap_context *sap_ctx;
 	bool is_dfs;
 
+	hdd_debug("bss_state: %d, chan_freq: %d, dfs_ref_cnt: %d",
+		  hostapd_state->bss_state, chan_freq,
+		  atomic_read(&hdd_ctx->sap_dfs_ref_cnt));
+	/* Return if BSS is already started && wakelock is acquired */
+	if ((hostapd_state->bss_state == BSS_START) &&
+		(atomic_read(&hdd_ctx->sap_dfs_ref_cnt) >= 1))
+		return;
+
 	sap_ctx = WLAN_HDD_GET_SAP_CTX_PTR(adapter->deflink);
 	if (!sap_ctx) {
 		hdd_err("sap ctx null");
 		return;
 	}
-
-	hdd_debug("bss_state: %d, chan_freq: %d, dfs_ref_cnt: %d, is_dfs_wakelock_held: %d",
-		  hostapd_state->bss_state, chan_freq,
-		  atomic_read(&hdd_ctx->sap_dfs_ref_cnt),
-		  sap_ctx->is_dfs_wakelock_held);
-
-	/* Return if BSS is already started && wakelock is acquired */
-	if (hostapd_state->bss_state == BSS_START &&
-	    (atomic_read(&hdd_ctx->sap_dfs_ref_cnt) >= 1))
-		return;
 
 	is_dfs = wlan_mlme_check_chan_param_has_dfs(hdd_ctx->pdev,
 						    &sap_ctx->ch_params,
@@ -459,8 +460,6 @@ static void hdd_hostapd_channel_prevent_suspend(struct hdd_adapter *adapter,
 		qdf_wake_lock_acquire(&hdd_ctx->sap_dfs_wakelock,
 				      WIFI_POWER_EVENT_WAKELOCK_DFS);
 	}
-
-	sap_ctx->is_dfs_wakelock_held = true;
 }
 
 /**
@@ -1805,7 +1804,7 @@ static void hdd_hostapd_set_sap_key(struct hdd_adapter *adapter)
 
 	for (key_index = 0; key_index < WLAN_CRYPTO_TOTAL_KEYIDX; ++key_index) {
 		crypto_key = wlan_crypto_get_key(adapter->deflink->vdev,
-						 NULL, key_index);
+						 key_index);
 		if (!crypto_key)
 			continue;
 
@@ -1813,7 +1812,7 @@ static void hdd_hostapd_set_sap_key(struct hdd_adapter *adapter)
 		ucfg_crypto_set_key_req(adapter->deflink->vdev, crypto_key,
 					WLAN_CRYPTO_KEY_TYPE_GROUP);
 		wma_update_set_key(adapter->deflink->vdev_id, false, key_index,
-				   NULL, crypto_key->cipher_type);
+				   crypto_key->cipher_type);
 	}
 }
 
@@ -2371,7 +2370,7 @@ QDF_STATUS hdd_hostapd_sap_event_cb(struct sap_event *sap_event,
 #endif
 		hdd_hostapd_channel_prevent_suspend(adapter,
 			ap_ctx->operating_chan_freq,
-			&ap_ctx->sap_context->ch_params);
+			&sap_config->ch_params);
 
 		hostapd_state->bss_state = BSS_START;
 		vdev = hdd_objmgr_get_vdev_by_user(link_info, WLAN_DP_ID);
@@ -3457,15 +3456,12 @@ static int hdd_softap_unpack_ie(mac_handle_t mac_handle,
 	return QDF_STATUS_SUCCESS;
 }
 
-bool hdd_is_any_sta_connecting(struct hdd_context *hdd_ctx,
-			       enum QDF_OPMODE op_mode)
+bool hdd_is_any_sta_connecting(struct hdd_context *hdd_ctx)
 {
 	struct hdd_adapter *adapter = NULL, *next_adapter = NULL;
 	struct hdd_station_ctx *sta_ctx;
 	wlan_net_dev_ref_dbgid dbgid = NET_DEV_HOLD_IS_ANY_STA_CONNECTING;
 	struct wlan_hdd_link_info *link_info;
-	bool is_connecting = false;
-	bool key_exchng_in_prog = false;
 
 	if (!hdd_ctx) {
 		hdd_err("HDD context is NULL");
@@ -3480,29 +3476,10 @@ bool hdd_is_any_sta_connecting(struct hdd_context *hdd_ctx,
 
 		hdd_adapter_for_each_active_link_info(adapter, link_info) {
 			sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(link_info);
-
-			is_connecting = hdd_cm_is_connecting(link_info);
-
-			/* In case of P2P GO + STA/CLI concurrency, when EAPOL
-			 * is in progress for STA/CLI, the P2P GO will still be
-			 * in NOA and if CSA is allowed then CSA frames won't
-			 * go over the air as P2P GO is in NOA.
-			 * In case of SAP, it doesn't need to check the EAPOL
-			 * in progress as the STA/CLI channel will be already
-			 * decided after getting connect complete indication.
-			 */
-			if (op_mode == QDF_P2P_GO_MODE)
-				key_exchng_in_prog =
-					sme_is_sta_key_exchange_in_progress(
-							hdd_ctx->mac_handle,
-							link_info->vdev_id);
-			if (!is_connecting && !key_exchng_in_prog)
+			if (!hdd_cm_is_connecting(link_info))
 				continue;
 
-			hdd_debug("vdev_id %d: connecting %d key_exchng_in_prog %d",
-				  link_info->vdev_id, is_connecting,
-				  key_exchng_in_prog);
-
+			hdd_debug("vdev_id %d: connecting", link_info->vdev_id);
 			hdd_adapter_dev_put_debug(adapter, dbgid);
 			if (next_adapter)
 				hdd_adapter_dev_put_debug(next_adapter, dbgid);
@@ -3560,20 +3537,9 @@ int hdd_softap_set_channel_change(struct net_device *dev, int target_chan_freq,
 	 * If sta connection is in progress do not allow SAP channel change from
 	 * user space as it may change the HW mode requirement, for which sta is
 	 * trying to connect.
-	 *
-	 * When P2P GO + STA/P2P-CLI concurrency arises. Dont allow CSA on GO
-	 * iface while eapol is in progress for STA/P2P-CLI vdev's or noa is in
-	 * progress in p2p go iface. Because for STA/P2P-CLI connection+eapol,
-	 * firmware does NOA(max 2.5 secs) on GO iface and during this time it
-	 * cannot do CSA as it won't be able to send CSA frames during NOA
-	 * period
 	 */
-	if (hdd_is_any_sta_connecting(hdd_ctx, adapter->device_mode) ||
-	    (adapter->device_mode == QDF_P2P_GO_MODE &&
-	     ucfg_p2p_is_p2p_go_noa_in_progress(hdd_ctx->pdev,
-						link_info->vdev_id))) {
-		hdd_err("vdev %d Do not allow CSA, STA connect/eapol/noa is in progress",
-			link_info->vdev_id);
+	if (hdd_is_any_sta_connecting(hdd_ctx)) {
+		hdd_err("STA connection is in progress");
 		return -EBUSY;
 	}
 
@@ -4334,6 +4300,52 @@ static const struct ethtool_ops wlan_hostapd_ethtool_ops = {
 };
 #endif
 
+#ifdef WLAN_FEATURE_OSRTP
+static int hdd_softap_xsk_wakeup(struct net_device *dev, uint32_t qid, uint32_t flags)
+{
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
+	struct xsk_buff_pool *pool = NULL;
+	struct cdp_tx_osrtp_desc osrtp_desc = {0};
+	ol_txrx_soc_handle soc_handle = cds_get_context(QDF_MODULE_ID_SOC);
+	struct hdd_adapter *adapter = (struct hdd_adapter *)netdev_priv(dev);
+
+	pool = cdp_get_osrtp_xsk_buff_pool(soc_handle);
+	if (!pool) {
+		hdd_err_rl("invalid xsk buff poll!");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	/* Drop the RCU lock since the SKB path might sleep. */
+	rcu_read_unlock();
+
+	//spin_lock(&pool->tx_lock);
+	while (osrtp_desc.num_descs < MAX_OSRTP_DESC_NUM) {
+		if (!mi_xsk_tx_peek_desc(pool, &(osrtp_desc.desc[osrtp_desc.num_descs])))
+			break;
+
+		osrtp_desc.num_descs++;
+	}
+	//spin_unlock(&pool->tx_lock);
+
+	if (osrtp_desc.num_descs <= 0) {
+		hdd_err_rl("[osrtp] No invaild desc");
+		ret = QDF_STATUS_E_INVAL;
+		goto out;
+	}
+
+	ucfg_dp_softap_start_xmit_osrtp(pool, adapter->deflink->vdev, &osrtp_desc);
+
+	mi_xsk_tx_release(pool);
+
+out:
+	mi_xp_put_pool(pool);
+	/* Reaquire RCU lock before going into common code. */
+	rcu_read_lock();
+
+	return ret;
+}
+#endif
+
 const struct net_device_ops net_ops_struct = {
 	.ndo_open = hdd_hostapd_open,
 	.ndo_stop = hdd_hostapd_stop,
@@ -4349,6 +4361,10 @@ const struct net_device_ops net_ops_struct = {
 	.ndo_select_queue = hdd_select_queue,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	.ndo_siocdevprivate = hdd_dev_private_ioctl,
+#endif
+#ifdef WLAN_FEATURE_OSRTP
+	.ndo_bpf = hdd_bpf,
+	.ndo_xsk_wakeup = hdd_softap_xsk_wakeup,
 #endif
 };
 
@@ -5739,7 +5755,7 @@ static int wlan_hdd_sap_p2p_11ac_overrides(struct hdd_adapter *ap_adapter)
 
 		if (!WLAN_REG_IS_24GHZ_CH_FREQ(sap_cfg->chan_freq)) {
 			status =
-			    ucfg_mlme_get_vht_channel_width(hdd_ctx->psoc,
+			   ucfg_mlme_get_vht_channel_width(hdd_ctx->psoc,
 							    &ch_width);
 			if (!QDF_IS_STATUS_SUCCESS(status))
 				hdd_err("Failed to set channel_width");
@@ -7124,8 +7140,7 @@ int wlan_hdd_cfg80211_start_bss(struct wlan_hdd_link_info *link_info,
 		hdd_set_connection_in_progress(false);
 		sme_get_command_q_status(mac_handle);
 		wlansap_stop_bss(WLAN_HDD_GET_SAP_CTX_PTR(link_info));
-		if (!cds_is_driver_recovering() &&
-		    QDF_IS_STATUS_ERROR(qdf_status))
+		if (!cds_is_driver_recovering())
 			QDF_ASSERT(0);
 		ret = -EINVAL;
 		goto error;
@@ -7254,11 +7269,6 @@ static int __wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 	 */
 	if (ret)
 		goto exit;
-
-	if (hdd_ctx->is_wiphy_suspended) {
-		hdd_debug("wiphy is suspended");
-		return -EINVAL;
-	}
 
 	if (QDF_GLOBAL_FTM_MODE == hdd_get_conparam()) {
 		hdd_err("Command not allowed in FTM mode");

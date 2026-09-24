@@ -1,0 +1,12 @@
+# Kbuild outputs; source provenance is recorded separately.
+*.o
+*.a
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.o.d
+*.order
+Module.symvers
+.tmp_versions/
+cam_generated_h

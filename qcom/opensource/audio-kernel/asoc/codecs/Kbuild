@@ -230,16 +230,16 @@ ifdef CONFIG_SND_SOC_WCD_IRQ
 	CORE_OBJS += wcd-irq.o
 endif
 
-ifdef CONFIG_SND_SOC_SDCA_REGISTERS
-	SDCA_REGISTERS_OBJS += sdca-registers-api.o
-endif
-
 ifdef CONFIG_SND_SWR_HAPTICS
 	SWR_HAP_OBJS += swr-haptics.o
 endif
 
 ifdef CONFIG_LPASS_BT_SWR
 	LPASS_BT_SWR_OBJS += lpass-bt-swr.o
+endif
+
+ifdef CONFIG_SND_SOC_TYPEC_ANALOG_ACC
+	TYPEC_ANALOG_ACC_OBJS += typec_analog_acc.o
 endif
 
 LINUX_INC +=	-Iinclude/linux
@@ -286,11 +286,10 @@ ifeq ($(KERNEL_BUILD), 1)
 	obj-y	+= lpass-cdc/
 	obj-y	+= wsa884x/
 	obj-y	+= wsa883x/
-	obj-y	+= aw882xx/
 	obj-y	+= rouleur/
+	obj-y	+= tfa986x/
 	obj-y	+= ./
 endif
-
 # Module information used by KBuild framework
 obj-$(CONFIG_WCD9XXX_CODEC_CORE) += wcd_core_dlkm.o
 obj-$(CONFIG_WCD9XXX_CODEC_CORE_V2) += wcd_core_dlkm.o
@@ -323,8 +322,8 @@ wcd_spi_dlkm-y := $(SPI_OBJS)
 obj-$(CONFIG_SND_SOC_WCD_MBHC) += mbhc_dlkm.o
 mbhc_dlkm-y := $(MBHC_OBJS)
 
-obj-$(CONFIG_SND_SOC_SDCA_REGISTERS) += sdca_registers_dlkm.o
-sdca_registers_dlkm-y := $(SDCA_REGISTERS_OBJS)
+obj-$(CONFIG_SND_SOC_TYPEC_ANALOG_ACC) += typec_analog_acc_dlkm.o
+typec_analog_acc_dlkm-y := $(TYPEC_ANALOG_ACC_OBJS)
 
 obj-$(CONFIG_SND_SOC_MSM_HDMI_CODEC_RX) += hdmi_dlkm.o
 hdmi_dlkm-y := $(HDMICODEC_OBJS)
@@ -334,3 +333,6 @@ swr_haptics_dlkm-y := $(SWR_HAP_OBJS)
 
 obj-$(CONFIG_LPASS_BT_SWR) += lpass_bt_swr_dlkm.o
 lpass_bt_swr_dlkm-y := $(LPASS_BT_SWR_OBJS)
+
+# inject some build related information
+DEFINES += -DBUILD_TIMESTAMP=\"$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')\"

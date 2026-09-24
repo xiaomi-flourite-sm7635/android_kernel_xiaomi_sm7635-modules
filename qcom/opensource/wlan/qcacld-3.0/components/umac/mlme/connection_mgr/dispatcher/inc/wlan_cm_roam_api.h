@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -112,8 +112,6 @@ wlan_roam_update_cfg(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
  */
 void wlan_cm_send_beacon_miss(uint8_t vdev_id, int32_t rssi);
 
-void cm_update_ext_cap_ie_at_source(struct wlan_objmgr_psoc *psoc,
-				    struct element_info *assoc_ie);
 #else
 static inline
 QDF_STATUS wlan_cm_roam_send_rso_cmd(struct wlan_objmgr_psoc *psoc,
@@ -151,11 +149,6 @@ wlan_cm_enable_roaming_on_connected_sta(struct wlan_objmgr_pdev *pdev,
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }
-
-static inline
-void cm_update_ext_cap_ie_at_source(struct wlan_objmgr_psoc *psoc,
-				    struct element_info *assoc_ie)
-{}
 #endif
 
 /**
@@ -1350,22 +1343,6 @@ QDF_STATUS
 wlan_cm_roam_stats_info_get(struct wlan_objmgr_vdev *vdev,
 			    struct enhance_roam_info **roam_info,
 			    uint32_t  *roam_num);
-
-/**
- * wlan_cm_roam_info_get() - get vdev roam info
- *
- * @vdev: pointer to vdev
- * @roam_info: pointer to buffer to copy roam stats info
- * @idx: index of roam stats cache buffer
- *
- * Return: QDF_STATUS
- */
-
-QDF_STATUS
-wlan_cm_roam_info_get(struct wlan_objmgr_vdev *vdev,
-		      struct enhance_roam_info **roam_info,
-		      uint8_t idx);
-
 #else
 static inline
 void mlme_cm_alloc_roam_stats_info(struct vdev_mlme_obj *vdev_mlme)
@@ -1996,10 +1973,10 @@ cm_roam_vendor_handoff_event_handler(struct wlan_objmgr_psoc *psoc,
  * respect to the self sta and the peer after roaming and completes
  * the roam synch propagation with respect to WMA layer.
  *
- * Return: QDF_STATUS
+ * Return: None
  */
-QDF_STATUS cm_roam_update_vdev(struct wlan_objmgr_vdev *vdev,
-			       struct roam_offload_synch_ind *sync_ind);
+void cm_roam_update_vdev(struct wlan_objmgr_vdev *vdev,
+			 struct roam_offload_synch_ind *sync_ind);
 
 /**
  * cm_roam_pe_sync_callback() - Callback registered at pe, gets invoked when
@@ -2314,14 +2291,6 @@ QDF_STATUS wlan_cm_link_switch_notif_cb(struct wlan_objmgr_vdev *vdev,
 	return QDF_STATUS_E_NOSUPPORT;
 }
 #endif /* WLAN_FEATURE_11BE_MLO && WLAN_FEATURE_ROAM_OFFLOAD */
-
-/**
- * cm_roam_get_roam_score_algo() - Get vendor roam score algorithm value
- * @psoc: Pointer to PSOC object
- *
- * Return: Vendor Roam score algorithm value
- */
-uint32_t cm_roam_get_roam_score_algo(struct wlan_objmgr_psoc *psoc);
 
 /**
  * wlan_update_peer_phy_mode() - update phymode in peer object

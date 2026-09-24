@@ -862,6 +862,35 @@
 
 /*
  * <ini>
+ * gActionOUIRestrictMLSR - Used to downgrade to MLSR for
+ * specific AP build version.
+ *
+ * Sample OUIs: (All values in Hex)
+ * OUI 3 : 000CE7
+ *   OUI data Len : 4
+ *   OUI Data : 01000000
+ *   OUI data Mask: F0
+ *   Info Mask : 01 - only OUI present in Info mask
+ *
+ * gActionOUIRestrictSLO=000CE7 04 01000000 F0 01 000CE7 04 09000000 F0 01
+ *
+ * Related: gEnableActionOUI
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_RESTRICT_MLSR CFG_INI_STRING( \
+	"gActionOUIRestrictMLSR", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"", \
+	"To restrict matching OUI APs to MLSR connection at max")
+
+/*
+ * <ini>
  * CFG_ACTION_OUI_LIMIT_BW - Used to limit BW for specified AP
  *
  * Example OUIs: (All values in Hex)
@@ -906,6 +935,7 @@
 	CFG(CFG_ACTION_OUI_ENABLE_CTS2SELF) \
 	CFG(CFG_ACTION_OUI_ENABLE_CTS2SELF_WITH_QOS_NULL) \
 	CFG(CFG_ACTION_OUI_RESTRICT_MAX_MLO_LINKS) \
+	CFG(CFG_ACTION_OUI_RESTRICT_MLSR) \
 	CFG(CFG_ACTION_OUI_SEND_SMPS_FRAME_WITH_OMN) \
 	CFG(CFG_ACTION_OUI_AUTH_ASSOC_6MBPS_2GHZ) \
 	CFG(CFG_ACTION_OUI_DISABLE_BFORMEE) \

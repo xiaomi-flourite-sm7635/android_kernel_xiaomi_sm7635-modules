@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -409,11 +409,6 @@ static const struct qwlan_hw qwlan_hw_list[] = {
 		.id = WCN6450_V1,
 		.subid = 0,
 		.name = "WCN6450_V1",
-	},
-	{
-		.id = WCN6450_V2,
-		.subid = 0,
-		.name = "WCN6450_V2",
 	},
 	{
 		.id = QCA6490_v2_1,
@@ -1794,24 +1789,6 @@ static void hif_reg_write_work(void *arg)
 	qdf_atomic_sub(num_processed, &scn->active_work_cnt);
 }
 
-static inline void
-__hif_flush_delayed_reg_write_work(struct hif_softc *scn)
-{
-	qdf_flush_work(&scn->reg_write_work);
-	qdf_disable_work(&scn->reg_write_work);
-}
-
-/**
- * hif_flush_delayed_reg_write_work() - flush pending reg write work
- * @scn: hif_softc pointer
- *
- * Return: None
- */
-void hif_flush_delayed_reg_write_work(struct hif_softc *scn)
-{
-	__hif_flush_delayed_reg_write_work(scn);
-}
-
 /**
  * hif_delayed_reg_write_deinit() - De-Initialize delayed reg write processing
  * @scn: hif_softc pointer
@@ -1823,7 +1800,8 @@ void hif_flush_delayed_reg_write_work(struct hif_softc *scn)
  */
 static void hif_delayed_reg_write_deinit(struct hif_softc *scn)
 {
-	__hif_flush_delayed_reg_write_work(scn);
+	qdf_flush_work(&scn->reg_write_work);
+	qdf_disable_work(&scn->reg_write_work);
 	qdf_flush_workqueue(0, scn->reg_write_wq);
 	qdf_destroy_workqueue(0, scn->reg_write_wq);
 	qdf_mem_free(scn->reg_write_queue);
@@ -2081,7 +2059,7 @@ QDF_STATUS hif_enable(struct hif_opaque_softc *hif_ctx, struct device *dev,
 	if (hif_bus_configure(scn)) {
 		hif_err("Target probe failed");
 		status = QDF_STATUS_E_FAILURE;
-		goto free_delayed_reg_mem;
+		goto hal_detach;
 	}
 
 	hif_ut_suspend_init(scn);
@@ -2102,8 +2080,6 @@ QDF_STATUS hif_enable(struct hif_opaque_softc *hif_ctx, struct device *dev,
 
 	return QDF_STATUS_SUCCESS;
 
-free_delayed_reg_mem:
-	hif_delayed_reg_write_deinit(scn);
 hal_detach:
 	hif_hal_detach(scn);
 disable_bus:

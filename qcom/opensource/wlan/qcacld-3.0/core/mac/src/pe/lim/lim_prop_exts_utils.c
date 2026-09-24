@@ -644,6 +644,8 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 		session->vhtCapabilityPresentInBeacon = 0;
 	}
 
+	channel = wlan_reg_freq_to_chan(mac_ctx->pdev,
+					beacon_struct->chan_freq);
 	if (session->vhtCapabilityPresentInBeacon == 1 &&
 	    !session->htSupportedChannelWidthSet) {
 		if (!mac_ctx->mlme_cfg->vht_caps.vht_cap_info.enable_txbf_20mhz)
@@ -655,6 +657,9 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 			lim_update_ch_width_for_p2p_client(
 					mac_ctx, session,
 					beacon_struct->chan_freq);
+		if (wlan_reg_is_24ghz_ch_freq(beacon_struct->chan_freq) &&
+		    abs(vht_op->chan_center_freq_seg0 - channel) == 2)
+			session->ch_width = CH_WIDTH_40MHZ;
 
 	} else if (session->vhtCapabilityPresentInBeacon && vht_op->chanWidth) {
 		/* If VHT is supported min 80 MHz support is must */
@@ -738,8 +743,6 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 		 */
 		session->ch_center_freq_seg0 = vht_op->chan_center_freq_seg0;
 		session->ch_center_freq_seg1 = chan_center_freq_seg1;
-		channel = wlan_reg_freq_to_chan(mac_ctx->pdev,
-						beacon_struct->chan_freq);
 		if (vht_ch_wd == WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ) {
 			/* DUT or AP supports only 160MHz */
 			if (ap_bcon_ch_width ==

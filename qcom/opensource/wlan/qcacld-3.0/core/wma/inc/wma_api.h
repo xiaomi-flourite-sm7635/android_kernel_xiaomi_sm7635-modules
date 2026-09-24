@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -103,9 +103,9 @@ struct wma_ps_params {
 
 /**
  * enum wma_sta_ps_scheme_cfg - STA power save schemes
- * @WMA_STA_PS_OPM_CONSERVATIVE: Conservative OPM mode
- * @WMA_STA_PS_OPM_AGGRESSIVE: Aggressive OPM mode
- * @WMA_STA_PS_USER_DEF: User defined OPM mode
+ * @WMA_STA_PS_OPM_CONSERVATIVE - Conservative OPM mode
+ * @WMA_STA_PS_OPM_AGGRESSIVE - Aggressive OPM mode
+ * @WMA_STA_PS_USER_DEF - User defined OPM mode
  */
 enum wma_sta_ps_scheme_cfg {
 	WMA_STA_PS_OPM_CONSERVATIVE = 0,
@@ -938,22 +938,4 @@ void wma_cleanup_vdev(struct wlan_objmgr_vdev *vdev);
  * Return: None
  */
 void wma_set_wakeup_logs_to_console(bool value);
-
-#ifdef FEATURE_WLAN_APF
-/**
- * wma_get_fw_active_apf_mode() - convert active_apf_mode to WMI
- * configurable APF mode
- * @mode: APF mode
- *
- * Return: FW configurable APF mode
- */
-enum wmi_host_active_apf_mode
-wma_get_fw_active_apf_mode(enum active_apf_mode mode);
-#else
-static inline enum wmi_host_active_apf_mode
-wma_get_fw_active_apf_mode(enum active_apf_mode mode)
-{
-	return WMI_HOST_ACTIVE_APF_DISABLED;
-}
-#endif /* FEATURE_WLAN_APF */
 #endif /* WMA_API_H */

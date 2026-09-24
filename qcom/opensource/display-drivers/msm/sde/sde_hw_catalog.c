@@ -19,8 +19,6 @@
 #include "sde_hw_uidle.h"
 #include "sde_connector.h"
 
-#include "msm_drv.h"
-
 /*************************************************************
  * MACRO DEFINITION
  *************************************************************/
@@ -217,7 +215,6 @@ enum sde_prop {
 	DIM_LAYER,
 	SMART_DMA_REV,
 	IDLE_PC,
-	ENABLE_HIBERNATION,
 	WAKEUP_WITH_TOUCH,
 	DEST_SCALER,
 	SMART_PANEL_ALIGN_MODE,
@@ -233,6 +230,7 @@ enum sde_prop {
 	IPCC_PROTOCOL_ID,
 	SDE_EMULATED_ENV,
 	IPCC_CLIENT_DPU_PHYS_ID,
+	SDE_DISP_CACHE_WORKAROUND,
 	SDE_PROP_MAX,
 };
 
@@ -626,8 +624,6 @@ static struct sde_prop_type sde_prop[] = {
 	{DIM_LAYER, "qcom,sde-has-dim-layer", false, PROP_TYPE_BOOL},
 	{SMART_DMA_REV, "qcom,sde-smart-dma-rev", false, PROP_TYPE_STRING},
 	{IDLE_PC, "qcom,sde-has-idle-pc", false, PROP_TYPE_BOOL},
-	{ENABLE_HIBERNATION, "qcom,sde-enable-hibernation", false,
-			PROP_TYPE_BOOL},
 	{WAKEUP_WITH_TOUCH, "qcom,sde-wakeup-with-touch", false,
 			PROP_TYPE_BOOL},
 	{DEST_SCALER, "qcom,sde-has-dest-scaler", false, PROP_TYPE_BOOL},
@@ -647,7 +643,8 @@ static struct sde_prop_type sde_prop[] = {
 	{TVM_INCLUDE_REG, "qcom,tvm-include-reg", false, PROP_TYPE_U32_ARRAY},
 	{IPCC_PROTOCOL_ID, "qcom,sde-ipcc-protocol-id", false, PROP_TYPE_U32},
 	{SDE_EMULATED_ENV, "qcom,sde-emulated-env", false, PROP_TYPE_BOOL},
-	{IPCC_CLIENT_DPU_PHYS_ID, "qcom,sde-ipcc-client-dpu-phys-id", false, PROP_TYPE_U32}
+	{IPCC_CLIENT_DPU_PHYS_ID, "qcom,sde-ipcc-client-dpu-phys-id", false, PROP_TYPE_U32},
+	{SDE_DISP_CACHE_WORKAROUND, "qcom,sde_disp_cache_workaround", false, PROP_TYPE_BOOL}
 };
 
 static struct sde_prop_type sde_perf_prop[] = {
@@ -4215,8 +4212,6 @@ static void _sde_top_parse_dt_helper(struct sde_mdss_cfg *cfg,
 		set_bit(SDE_FEATURE_DIM_LAYER, cfg->features);
 	if (PROP_VALUE_ACCESS(props->values, IDLE_PC, 0))
 		set_bit(SDE_FEATURE_IDLE_PC, cfg->features);
-	if (PROP_VALUE_ACCESS(props->values, ENABLE_HIBERNATION, 0))
-		set_bit(SDE_FEATURE_ENABLE_HIBERNATION, cfg->features);
 	if (PROP_VALUE_ACCESS(props->values, WAKEUP_WITH_TOUCH, 0))
 		set_bit(SDE_FEATURE_TOUCH_WAKEUP, cfg->features);
 	cfg->pipe_order_type = PROP_VALUE_ACCESS(props->values,
@@ -4227,6 +4222,7 @@ static void _sde_top_parse_dt_helper(struct sde_mdss_cfg *cfg,
 	cfg->trusted_vm_env = PROP_VALUE_ACCESS(props->values, TRUSTED_VM_ENV, 0);
 	cfg->max_trusted_vm_displays = PROP_VALUE_ACCESS(props->values,
 			MAX_TRUSTED_VM_DISPLAYS, 0);
+	cfg->disp_cache_workaround = PROP_VALUE_ACCESS(props->values, SDE_DISP_CACHE_WORKAROUND, 0);
 	if (props->exists[TVM_INCLUDE_REG]) {
 		cfg->tvm_reg_count = props->counts[TVM_INCLUDE_REG] / 2;
 		for (i = 0; i < cfg->tvm_reg_count; i++) {
@@ -5088,22 +5084,6 @@ static void _sde_hw_setup_uidle(struct sde_uidle_cfg *uidle_cfg)
 	}
 }
 
-static void _sde_get_hw_caps(struct drm_device *dev,
-			struct sde_mdss_cfg *sde_cfg)
-{
-	struct sde_kms *sde_kms;
-
-	if (!ddev_to_msm_kms(dev))
-		return;
-
-	sde_kms = to_sde_kms(ddev_to_msm_kms(dev));
-
-	if (IS_VOLCANO_TARGET(sde_cfg->hw_rev))
-		sde_cfg->capabilities = readl_relaxed(sde_kms->mmio + 0x68);
-	else
-		sde_cfg->capabilities = 0;
-}
-
 static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 {
 	int rc = 0, i;
@@ -5471,32 +5451,6 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		sde_cfg->demura_supported[SSPP_DMA3][0] = 0;
 		sde_cfg->demura_supported[SSPP_DMA3][1] = 1;
 		sde_cfg->has_line_insertion = true;
-	} else if (IS_NEO_TARGET(hw_rev)) {
-		set_bit(SDE_FEATURE_DEDICATED_CWB, sde_cfg->features);
-		set_bit(SDE_FEATURE_CWB_DITHER, sde_cfg->features);
-		set_bit(SDE_FEATURE_WB_UBWC, sde_cfg->features);
-		set_bit(SDE_FEATURE_CWB_CROP, sde_cfg->features);
-		set_bit(SDE_FEATURE_QSYNC, sde_cfg->features);
-		sde_cfg->perf.min_prefill_lines = 40;
-		sde_cfg->vbif_qos_nlvl = 8;
-		sde_cfg->ts_prefill_rev = 2;
-		sde_cfg->ctl_rev = SDE_CTL_CFG_VERSION_1_0_0;
-		set_bit(SDE_FEATURE_3D_MERGE_RESET, sde_cfg->features);
-		clear_bit(SDE_FEATURE_HDR, sde_cfg->features);
-		set_bit(SDE_FEATURE_INLINE_SKIP_THRESHOLD, sde_cfg->features);
-		set_bit(SDE_MDP_DHDR_MEMPOOL_4K, &sde_cfg->mdp[0].features);
-		set_bit(SDE_FEATURE_VIG_P010, sde_cfg->features);
-		sde_cfg->true_inline_rot_rev = SDE_INLINE_ROT_VERSION_2_0_1;
-		set_bit(SDE_FEATURE_VBIF_DISABLE_SHAREABLE, sde_cfg->features);
-		set_bit(SDE_FEATURE_DITHER_LUMA_MODE, sde_cfg->features);
-		sde_cfg->mdss_hw_block_size = 0x158;
-		set_bit(SDE_FEATURE_MULTIRECT_ERROR, sde_cfg->features);
-		set_bit(SDE_FEATURE_FP16, sde_cfg->features);
-		set_bit(SDE_MDP_PERIPH_TOP_0_REMOVED, &sde_cfg->mdp[0].features);
-		set_bit(SDE_FEATURE_HW_VSYNC_TS, sde_cfg->features);
-		set_bit(SDE_FEATURE_AVR_STEP, sde_cfg->features);
-		set_bit(SDE_FEATURE_UBWC_STATS, sde_cfg->features);
-		set_bit(SDE_FEATURE_VBIF_CLK_SPLIT, sde_cfg->features);
 	} else if (IS_PINEAPPLE_TARGET(hw_rev)) {
 		set_bit(SDE_FEATURE_DEDICATED_CWB, sde_cfg->features);
 		set_bit(SDE_FEATURE_DUAL_DEDICATED_CWB, sde_cfg->features);
@@ -5522,10 +5476,10 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		set_bit(SDE_FEATURE_TRUSTED_VM, sde_cfg->features);
 		set_bit(SDE_FEATURE_CTL_DONE, sde_cfg->features);
 		set_bit(SDE_FEATURE_TRUSTED_VM, sde_cfg->features);
-		set_bit(SDE_SYS_CACHE_DISP, sde_cfg->sde_sys_cache_type_map);
-		set_bit(SDE_SYS_CACHE_DISP_WB, sde_cfg->sde_sys_cache_type_map);
-		set_bit(SDE_FEATURE_SYS_CACHE_NSE, sde_cfg->features);
-		set_bit(SDE_FEATURE_SYS_CACHE_STALING, sde_cfg->features);
+		// set_bit(SDE_SYS_CACHE_DISP, sde_cfg->sde_sys_cache_type_map);
+		// set_bit(SDE_SYS_CACHE_DISP_WB, sde_cfg->sde_sys_cache_type_map);
+		// set_bit(SDE_FEATURE_SYS_CACHE_NSE, sde_cfg->features);
+		// set_bit(SDE_FEATURE_SYS_CACHE_STALING, sde_cfg->features);
 		set_bit(SDE_FEATURE_WB_ROTATION, sde_cfg->features);
 		set_bit(SDE_FEATURE_EPT, sde_cfg->features);
 		sde_cfg->allowed_dsc_reservation_switch = SDE_DP_DSC_RESERVATION_SWITCH;
@@ -5570,9 +5524,9 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		set_bit(SDE_FEATURE_VBIF_CLK_SPLIT, sde_cfg->features);
 		set_bit(SDE_FEATURE_TRUSTED_VM, sde_cfg->features);
 		set_bit(SDE_FEATURE_CTL_DONE, sde_cfg->features);
-		set_bit(SDE_SYS_CACHE_DISP, sde_cfg->sde_sys_cache_type_map);
-		set_bit(SDE_FEATURE_SYS_CACHE_NSE, sde_cfg->features);
-		set_bit(SDE_FEATURE_SYS_CACHE_STALING, sde_cfg->features);
+		//set_bit(SDE_SYS_CACHE_DISP, sde_cfg->sde_sys_cache_type_map);
+		//set_bit(SDE_FEATURE_SYS_CACHE_NSE, sde_cfg->features);
+		//set_bit(SDE_FEATURE_SYS_CACHE_STALING, sde_cfg->features);
 		set_bit(SDE_FEATURE_WB_ROTATION, sde_cfg->features);
 		set_bit(SDE_FEATURE_EPT, sde_cfg->features);
 		sde_cfg->allowed_dsc_reservation_switch = SDE_DP_DSC_RESERVATION_SWITCH;
@@ -5586,6 +5540,7 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		sde_cfg->ctl_rev = SDE_CTL_CFG_VERSION_1_0_0;
 		sde_cfg->true_inline_rot_rev = SDE_INLINE_ROT_VERSION_2_0_1;
 		sde_cfg->uidle_cfg.uidle_rev = SDE_UIDLE_VERSION_1_0_4;
+		sde_cfg->uidle_cfg.fal10_override = true;
 		sde_cfg->sid_rev = SDE_SID_VERSION_2_0_0;
 		sde_cfg->mdss_hw_block_size = 0x158;
 		sde_cfg->demura_supported[SSPP_DMA1][0] = BIT(DEMURA_0) | BIT(DEMURA_2);
@@ -5877,7 +5832,6 @@ static int sde_hw_ver_parse_dt(struct drm_device *dev, struct device_node *np,
 	else
 		cfg->hw_fence_rev = 0; /* disable hw-fences */
 
-	 _sde_get_hw_caps(dev, cfg);
 end:
 	kfree(prop_value);
 	return rc;

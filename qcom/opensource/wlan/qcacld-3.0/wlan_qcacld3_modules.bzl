@@ -1,57 +1,91 @@
 load("//build/bazel_common_rules/dist:dist.bzl", "copy_to_dist_dir")
 load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
-load("//msm-kernel:target_variants.bzl", "get_all_variants")
+load("//msm-kernel:target_variants.bzl", "get_all_variants", "get_arch_of_target")
 
 _target_chipset_map = {
     "niobe": [
 	"kiwi-v2",
     ],
     "pineapple": [
-	"peach-v2",
 	"peach",
 	"kiwi-v2",
 	"qca6750",
-	"wcn6450",
     ],
     "sun": [
-	"peach-v2",
         "peach",
         "kiwi-v2",
+    ],
+    "shennong": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "houji": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "manet": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "aurora": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "ruyi": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "suiren": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "goku": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "peridot": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "chenfeng": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "uke": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "muyu": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "amethyst": [
+        "kiwi-v2",
+        "qca6750",
+    ],
+    "flourite": [
+        "kiwi-v2",
+        "qca6750",
     ],
     "volcano": [
         "qca6750",
-	"peach-v2",
     ],
-    "parrot": [
-        "qca6750",
-        "adrastea",
-    ],
-    "fps": [
-        "peach-v2",
-        "peach",
+    "zorn": [
         "kiwi-v2",
         "qca6750",
-        "wcn6450",
     ],
 }
 
 _chipset_hw_map = {
     "kiwi-v2": "BERYLLIUM",
     "peach": "BERYLLIUM",
-    "peach-v2": "BERYLLIUM",
     "qca6750": "MOSELLE",
-    "adrastea" : "ADRASTEA",
-    "wcn6450": "RHINE",
 }
 
 _chipset_header_map = {
-    "peach-v2": [
-        "api/hw/peach/v2",
-        "cmn/hal/wifi3.0/peach",
-    ],
     "peach": [
         "api/hw/peach/v1",
-        "cmn/hal/wifi3.0/peach",
+        "cmn/hal/wifi3.0/kiwi",
     ],
     "kiwi-v2": [
         "api/hw/kiwi/v2",
@@ -61,12 +95,6 @@ _chipset_header_map = {
         "api/hw/qca6750/v1",
         "cmn/hal/wifi3.0/qca6750",
     ],
-    "adrastea" : [
-    ],
-    "wcn6450": [
-        "api/hw/wcn6450/v1",
-        "cmn/hal/wifi3.0/wcn6450",
-    ],
 }
 
 _hw_header_map = {
@@ -75,11 +103,36 @@ _hw_header_map = {
     ],
     "MOSELLE" : [
         "cmn/hal/wifi3.0/li",
-	],
-    "ADRASTEA" : [
-        ],
-    "RHINE": [
-        "cmn/hal/wifi3.0/rh",
+    ],
+}
+
+_xiaomi_feature_copts_map = {
+    "WLAN_FEATURE_OSRTP": [
+        "ruyi",
+        "suiren",
+    ],
+    "WLAN_FEATURE_11BE_SUPP_NONWPA3": [
+        "ruyi",
+        "muyu",
+        "aurora",
+        "goku",
+        "houji",
+        "shennong",
+        "shennong_t",
+        "manet",
+        "zorn",
+    ],
+    "WLAN_FEATURE_MULTI_P2P": [
+        "houji",
+        "aurora",
+        "shennong",
+        "manet",
+        "muyu",
+    ],
+    "WLAN_FEATURE_FAST_CONNECT": [
+        "muyu",
+        "shennong",
+        "houji",
     ],
 }
 
@@ -112,7 +165,6 @@ _fixed_ipaths = [
     "cmn/hif/src/dispatcher",
     "cmn/hif/src/pcie",
     "cmn/hif/src/ipcie",
-    "cmn/hif/src/snoc",
     "cmn/htc",
     "cmn/init_deinit/dispatcher/inc",
     "cmn/ipa/core/inc",
@@ -359,6 +411,16 @@ _private_ipaths = [
 
 _fixed_srcs = [
     "cmn/cfg/src/cfg.c",
+    "cmn/dp/wifi3.0/dp_arch_ops.c",
+    "cmn/dp/wifi3.0/dp_htt.c",
+    "cmn/dp/wifi3.0/dp_main.c",
+    "cmn/dp/wifi3.0/dp_peer.c",
+    "cmn/dp/wifi3.0/dp_rx.c",
+    "cmn/dp/wifi3.0/dp_rx_defrag.c",
+    "cmn/dp/wifi3.0/dp_rx_desc.c",
+    "cmn/dp/wifi3.0/dp_stats.c",
+    "cmn/dp/wifi3.0/dp_tx.c",
+    "cmn/dp/wifi3.0/dp_tx_desc.c",
     "cmn/global_lmac_if/src/wlan_global_lmac_if.c",
     "cmn/hif/src/ath_procfs.c",
     "cmn/hif/src/ce/ce_diag.c",
@@ -415,6 +477,7 @@ _fixed_srcs = [
     "cmn/scheduler/src/scheduler_core.c",
     "cmn/target_if/core/src/target_if_main.c",
     "cmn/target_if/crypto/src/target_if_crypto.c",
+    "cmn/target_if/dp/src/target_if_dp.c",
     "cmn/target_if/init_deinit/src/init_cmd_api.c",
     "cmn/target_if/init_deinit/src/init_deinit_lmac.c",
     "cmn/target_if/init_deinit/src/init_event_handler.c",
@@ -717,23 +780,19 @@ _conditional_srcs = {
     },
     "CONFIG_CNSS_KIWI_V2": {
         True: [
-            "cmn/hif/src/kiwidef.c",
-        ],
-    },
-    "CONFIG_INCLUDE_HAL_KIWI": {
-        True: [
             "cmn/hal/wifi3.0/kiwi/hal_kiwi.c",
-        ],
-    },
-    "CONFIG_INCLUDE_HAL_PEACH": {
-        True: [
-            "cmn/hal/wifi3.0/peach/hal_peach.c",
+            "cmn/hif/src/kiwidef.c",
         ],
     },
     "CONFIG_QCA6750_HEADERS_DEF": {
         True: [
             "cmn/hal/wifi3.0/qca6750/hal_6750.c",
             "cmn/hif/src/qca6750def.c",
+        ],
+    },
+    "CONFIG_CNSS_PEACH": {
+        True: [
+            "cmn/hal/wifi3.0/kiwi/hal_kiwi.c",
         ],
     },
     "CONFIG_CP_STATS": {
@@ -1034,7 +1093,6 @@ _conditional_srcs = {
     "CONFIG_HIF_SNOC": {
         True: [
             "cmn/hif/src/dispatcher/multibus_snoc.c",
-            "cmn/hif/src/snoc/if_snoc.c"
         ],
     },
     "CONFIG_HIF_USB": {
@@ -1116,47 +1174,7 @@ _conditional_srcs = {
             "components/dp/core/src/wlan_dp_prealloc.c",
         ],
     },
-	"CONFIG_HELIUMPLUS": {
-        True: [
-            "cmn/hif/src/ce/ce_service_legacy.c",
-            "core/dp/txrx/ol_txrx.c",
-            "core/dp/txrx/ol_cfg.c",
-            "core/dp/txrx/ol_rx.c",
-            "core/dp/txrx/ol_rx_fwd.c",
-            "core/dp/txrx/ol_rx_defrag.c",
-            "core/dp/txrx/ol_tx_desc.c",
-            "core/dp/txrx/ol_tx.c",
-            "core/dp/txrx/ol_rx_reorder_timeout.c",
-            "core/dp/txrx/ol_rx_reorder.c",
-            "core/dp/txrx/ol_rx_pn.c",
-            "core/dp/txrx/ol_txrx_peer_find.c",
-            "core/dp/txrx/ol_txrx_encap.c",
-            "core/dp/txrx/ol_tx_send.c",
-            "core/dp/htt/htt.c",
-            "core/dp/htt/htt_h2t.c",
-            "core/dp/htt/htt_t2h.c",
-            "core/dp/htt/htt_rx.c",
-            "core/dp/htt/htt_fw_stats.c",
-            "core/dp/htt/htt_tx.c",
-            "core/dp/htt/htt_rx_ll.c",
-            "core/dp/htt/htt_monitor_rx.c",
-            "cmn/hif/src/hif_main_legacy.c"
-		],
-        False: [
-            "cmn/dp/wifi3.0/dp_arch_ops.c",
-            "cmn/dp/wifi3.0/dp_htt.c",
-            "cmn/dp/wifi3.0/dp_main.c",
-            "cmn/dp/wifi3.0/dp_peer.c",
-            "cmn/dp/wifi3.0/dp_rx.c",
-            "cmn/dp/wifi3.0/dp_rx_defrag.c",
-            "cmn/dp/wifi3.0/dp_rx_desc.c",
-            "cmn/dp/wifi3.0/dp_stats.c",
-            "cmn/dp/wifi3.0/dp_tx.c",
-            "cmn/dp/wifi3.0/dp_tx_desc.c",
-            "cmn/target_if/dp/src/target_if_dp.c",
-		],
-	},
-    "CONFIG_LL_DP_SUPPORT_LEGACY": {
+    "LEGACY_CONFIG_LL_DP_SUPPORT": {
         True: [
             "core/dp/txrx/ol_tx_ll.c",
         ],
@@ -1336,7 +1354,7 @@ _conditional_srcs = {
             "components/umac/mlme/connection_mgr/core/src/wlan_cm_roam_offload_event.c",
         ],
     },
-    "CONFIG_QCA_SUPPORT_TX_THROTTLE_LEGACY": {
+    "LEGACY_CONFIG_QCA_SUPPORT_TX_THROTTLE": {
         True: [
             "core/dp/txrx/ol_tx_throttle.c",
         ],
@@ -1417,14 +1435,6 @@ _conditional_srcs = {
             "cmn/hal/wifi3.0/hal_srng.c",
             "cmn/wlan_cfg/wlan_cfg.c",
             "components/dp/core/src/wlan_dp_prealloc.c",
-            "cmn/hif/src/ce/ce_service_legacy.c",
-            "cmn/hif/src/hif_main_legacy.c",
-            "cmn/hal/wifi3.0/rh/hal_rh_generic_api.c"
-        ],
-    },
-	"CONFIG_CNSS_WCN6450": {
-        True: [
-            "cmn/hal/wifi3.0/wcn6450/hal_wcn6450.c",
         ],
     },
     "CONFIG_RX_FISA": {
@@ -1620,11 +1630,10 @@ _conditional_srcs = {
             "cmn/target_if/cfr/src/target_if_cfr_enh.c",
         ],
     },
-    "CONFIG_WLAN_FASTPATH_LEGACY": {
-        True: [
-            "core/dp/txrx/ol_tx_ll_fastpath.c",
-        ],
-	},
+    #"LEGACY_CONFIG_WLAN_FASTPATH": {
+    #True: [
+    #    "core/dp/txrx/ol_tx_ll_fastpath.c",
+    #],
     #TODO: Will need to create a separate flag to handle false case
     #False: [
     #    "core/dp/txrx/ol_tx_ll_legacy.c",
@@ -2139,11 +2148,6 @@ _conditional_srcs = {
             "cmn/dp/wifi3.0/dp_tx_flow_control.c",
         ],
     },
-    "CONFIG_WLAN_TX_FLOW_CONTROL_V2_HL": {
-        True: [
-            "core/dp/txrx/ol_txrx_flow_control.c",
-        ],
-	},
     "CONFIG_WLAN_WBUFF": {
         True: [
             "cmn/wbuff/src/wbuff.c",
@@ -2223,6 +2227,9 @@ def _define_module_for_target_variant_chipset(target, variant, chipset):
     chipset_ipaths = _chipset_header_map[chipset]
     hw_ipaths = _hw_header_map[hw]
 
+    arch = get_arch_of_target(target)
+    avc = "{}_{}_{}".format(arch, variant, chipset)
+
     ipaths = chipset_ipaths + hw_ipaths + _fixed_ipaths
 
     iglobs = []
@@ -2295,50 +2302,61 @@ def _define_module_for_target_variant_chipset(target, variant, chipset):
     copts.append("-fstrict-flex-arrays=0")
     copts.append("-include")
     copts.append("$(location :{}_grep_defines)".format(tvc))
+    if target == "suiren" or target == "ampere":
+        copts.append("-DQC_WIFI_VENDOR_AUTO")
 
-    native.genrule(
-        name = "configs/{}_defconfig_generate_consolidate".format(tvc),
-        outs = ["configs/{}_defconfig.generated_consolidate".format(tvc)],
-        srcs = [
-            "configs/{}_gki_{}_defconfig".format(target, chipset),
-            "configs/{}_consolidate_{}_defconfig".format(target, chipset),
-        ],
-        cmd = "cat $(SRCS) > $@",
-    )
-    native.genrule(
-        name = "configs/{}_defconfig_generate_gki".format(tvc),
-        outs = ["configs/{}_defconfig.generated_gki".format(tvc)],
-        srcs = [
-            "configs/{}_gki_{}_defconfig".format(target, chipset),
-        ],
-        cmd = "cat $(SRCS) > $@",
-    )
-    native.genrule(
-        name = "configs/{}_defconfig_generate_perf".format(tvc),
-        outs = ["configs/{}_defconfig.generated_perf".format(tvc)],
-        srcs = [
-            "configs/{}_gki_{}_defconfig".format(target, chipset),
-        ],
-        cmd = "cat $(SRCS) > $@",
-    )
+    for f in _xiaomi_feature_copts_map:
+        for t in _xiaomi_feature_copts_map.get(f):
+            if target == t:
+                copts.append("-D{}".format(f))
+                break
 
+    if arch == target:
+        native.genrule(
+            name = "configs/{}_defconfig_generate_consolidate".format(tvc),
+            outs = ["configs/{}_defconfig.generated_consolidate".format(tvc)],
+	        srcs = [
+	        	"configs/{}_gki_{}_defconfig".format(target,chipset),
+	        	"configs/{}_consolidate_{}_defconfig".format(target,chipset),
+	        ],
+	        cmd = "cat $(SRCS) > $@",
+        )
+        native.genrule(
+            name = "configs/{}_defconfig_generate_gki".format(tvc),
+            outs = ["configs/{}_defconfig.generated_gki".format(tvc)],
+	        srcs = [
+	        	"configs/{}_gki_{}_defconfig".format(target,chipset),
+	        ],
+	        cmd = "cat $(SRCS) > $@",
+        )
+        native.genrule(
+            name = "configs/{}_defconfig_generate_perf".format(tvc),
+            outs = ["configs/{}_defconfig.generated_perf".format(tvc)],
+	        srcs = [
+	        	"configs/{}_gki_{}_defconfig".format(target, chipset),
+	        ],
+	        cmd = "cat $(SRCS) > $@",
+        )
 
     srcs = native.glob(iglobs) + _fixed_srcs
 
     out = "qca_cld3_{}.ko".format(chipset.replace("-", "_"))
     kconfig = "Kconfig"
-    defconfig = ":configs/{}_defconfig_generate_{}".format(tvc, variant)
+    defconfig = ":configs/{}_defconfig_generate_{}".format(avc,variant)
 
-    if chipset == "qca6750" or chipset == "adrastea" or chipset == "wcn6450":
+    if chipset == "qca6750":
         deps = [
             "//vendor/qcom/opensource/wlan/platform:{}_icnss2".format(tv),
             "//vendor/qcom/opensource/wlan/platform:{}_cnss_prealloc".format(tv),
             "//vendor/qcom/opensource/wlan/platform:{}_cnss_utils".format(tv),
             "//vendor/qcom/opensource/wlan/platform:{}_cnss_nl".format(tv),
             "//msm-kernel:all_headers",
+            "//msm-kernel:hwid_headers",
             "//vendor/qcom/opensource/wlan/platform:wlan-platform-headers",
             "//vendor/qcom/opensource/dataipa:include_headers",
             "//vendor/qcom/opensource/dataipa:{}_{}_ipam".format(target, variant),
+            "//vendor/xiaomi/proprietary/minet/mixdp:{}_mixdp".format(tv),
+            "//vendor/xiaomi/proprietary/minet/mixdp:mixdp-headers",
         ]
     else:
         deps = [
@@ -2347,9 +2365,12 @@ def _define_module_for_target_variant_chipset(target, variant, chipset):
             "//vendor/qcom/opensource/wlan/platform:{}_cnss_utils".format(tv),
             "//vendor/qcom/opensource/wlan/platform:{}_cnss_nl".format(tv),
             "//msm-kernel:all_headers",
+            "//msm-kernel:hwid_headers",
             "//vendor/qcom/opensource/wlan/platform:wlan-platform-headers",
             "//vendor/qcom/opensource/dataipa:include_headers",
             "//vendor/qcom/opensource/dataipa:{}_{}_ipam".format(target, variant),
+            "//vendor/xiaomi/proprietary/minet/mixdp:{}_mixdp".format(tv),
+            "//vendor/xiaomi/proprietary/minet/mixdp:mixdp-headers",
         ]
 
     print("name=", name)

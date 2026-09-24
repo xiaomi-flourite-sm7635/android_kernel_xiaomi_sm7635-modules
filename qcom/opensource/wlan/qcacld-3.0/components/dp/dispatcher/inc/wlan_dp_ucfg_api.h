@@ -40,6 +40,10 @@
 #define DP_DISCONNECT_AFTER_NUD_FAIL            1
 #define DP_ROAM_AFTER_NUD_FAIL                  2
 #define DP_DISCONNECT_AFTER_ROAM_FAIL           3
+#define DP_NOFITY_EVENT_AFTER_ROAM_FAIL         4
+
+#define WLAN_DBG_DATA_STALL_CONSECUTIVE_NUD_FAILURE    1000
+#define WLAN_DBG_DATA_STALL_CONSECUTICE_BMISS          1001
 
 #ifdef WLAN_NUD_TRACKING
 bool
@@ -47,6 +51,9 @@ ucfg_dp_is_roam_after_nud_enabled(struct wlan_objmgr_psoc *psoc);
 
 bool
 ucfg_dp_is_disconect_after_roam_fail(struct wlan_objmgr_psoc *psoc);
+
+bool
+ucfg_dp_is_nud_failure_event_notify(struct wlan_objmgr_psoc *psoc);
 #else
 static inline bool
 ucfg_dp_is_roam_after_nud_enabled(struct wlan_objmgr_psoc *psoc)
@@ -56,6 +63,12 @@ ucfg_dp_is_roam_after_nud_enabled(struct wlan_objmgr_psoc *psoc)
 
 static inline bool
 ucfg_dp_is_disconect_after_roam_fail(struct wlan_objmgr_psoc *psoc)
+{
+	return false;
+}
+
+static inline bool
+ucfg_dp_is_nud_failure_event_notify(struct wlan_objmgr_psoc *psoc)
 {
 	return false;
 }
@@ -1644,6 +1657,32 @@ ucfg_dp_is_local_pkt_capture_enabled(struct wlan_objmgr_psoc *psoc)
 QDF_STATUS ucfg_dp_get_vdev_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
 				  struct cdp_vdev_stats *buf);
 
+#ifdef WLAN_FEATURE_OSRTP
+/**
+ * ucfg_dp_start_xmit_osrtp() - Transmit osrtp packet on STA interface
+ * @pool: xsk buff pool
+ * @vdev: vdev mapped to STA DP interface
+ * @osrtp_desc: array of osrtp desc
+ *
+ * Return: 0 on success and non zero on failure.
+ */
+QDF_STATUS
+ucfg_dp_start_xmit_osrtp(struct xsk_buff_pool *pool, struct wlan_objmgr_vdev *vdev,
+                  struct cdp_tx_osrtp_desc *osrtp_desc);
+
+/**
+ * ucfg_dp_softap_start_xmit() - Transmit osrtp packet on SAP interface
+ * @pool: xsk buff pool
+ * @vdev: vdev mapped to STA DP interface
+ * @osrtp_desc: array of osrtp desc
+ *
+ * Return: 0 on success and non zero on failure.
+ */
+QDF_STATUS
+ucfg_dp_softap_start_xmit_osrtp(struct xsk_buff_pool *pool, struct wlan_objmgr_vdev *vdev,
+                  struct cdp_tx_osrtp_desc *osrtp_desc);
+#endif
+
 /*
  * ucfg_dp_set_mon_conf_flags(): Set monitor configuration flags
  * @psoc: psoc handle
@@ -1652,4 +1691,7 @@ QDF_STATUS ucfg_dp_get_vdev_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
  * Return: None
  */
 void ucfg_dp_set_mon_conf_flags(struct wlan_objmgr_psoc *psoc, uint32_t flags);
+
+bool
+ucfg_dp_bmiss_event_notify(struct wlan_objmgr_psoc *psoc);
 #endif /* _WLAN_DP_UCFG_API_H_ */

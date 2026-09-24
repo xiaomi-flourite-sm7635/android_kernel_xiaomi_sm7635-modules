@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -36,6 +36,7 @@
 #include "twt/core/src/wlan_twt_cfg.h"
 #include "wlan_scan_api.h"
 #include "wlan_mlme_vdev_mgr_interface.h"
+#include "hwid.h"
 #include "wlan_vdev_mgr_utils_api.h"
 #include <wmi_unified_priv.h>
 #include <target_if.h>
@@ -1161,9 +1162,19 @@ static inline void mlme_init_oem_eht_mlo_cfg(struct wlan_objmgr_psoc *psoc,
 	gen->oem_eht_mlo_crypto_bitmap =
 				cfg_get(psoc, CFG_OEM_EHT_MLO_CRYPTO_BITMAP);
 }
+static inline void mlme_init_eht_open_crypto_allow_cfg(struct wlan_objmgr_psoc *psoc,
+						 struct wlan_mlme_generic *gen)
+{
+	gen->eht_mlo_crypto_open_allow =
+				cfg_get(psoc, CFG_EHT_MLO_CRYPTO_OPEN_ALLOW);
+}
 #else
 static inline void mlme_init_oem_eht_mlo_cfg(struct wlan_objmgr_psoc *psoc,
 					     struct wlan_mlme_generic *gen)
+{
+}
+static inline void mlme_init_eht_open_crypto_allow_cfg(struct wlan_objmgr_psoc *psoc,
+						 struct wlan_mlme_generic *gen)
 {
 }
 #endif /* WLAN_FEATURE_11BE */
@@ -1394,6 +1405,7 @@ static void mlme_init_generic_cfg(struct wlan_objmgr_psoc *psoc,
 	gen->wls_6ghz_capable = cfg_get(psoc, CFG_WLS_6GHZ_CAPABLE);
 	mlme_init_pmf_cfg(psoc, gen);
 	mlme_init_oem_eht_mlo_cfg(psoc, gen);
+	mlme_init_eht_open_crypto_allow_cfg(psoc, gen);
 	mlme_init_lpass_support_cfg(psoc, gen);
 	gen->enabled_rf_test_mode = cfg_default(CFG_RF_TEST_MODE_SUPP_ENABLED);
 	gen->enabled_11h = cfg_get(psoc, CFG_11H_SUPPORT_ENABLED);
@@ -1597,6 +1609,9 @@ static void
 mlme_init_qos_edca_params(struct wlan_objmgr_psoc *psoc,
 			  struct wlan_mlme_edca_params *edca_params)
 {
+	uint32_t hw_country_ver = 0;
+	hw_country_ver = get_hw_country_version();
+
 	edca_params->enable_edca_params =
 			cfg_get(psoc, CFG_EDCA_ENABLE_PARAM);
 
@@ -1632,6 +1647,11 @@ mlme_init_qos_edca_params(struct wlan_objmgr_psoc *psoc,
 
 	edca_params->edca_param_type =
 			cfg_get(psoc, CFG_EDCA_PIFS_PARAM_TYPE);
+
+	if ((uint32_t)CountryCN != hw_country_ver) {
+		edca_params->enable_edca_params = 0;
+		mlme_debug("set enable_edca_params 0 due to not CN build");
+	}
 }
 
 static void mlme_init_edca_params(struct wlan_objmgr_psoc *psoc,
@@ -1960,9 +1980,6 @@ static void mlme_init_dfs_cfg(struct wlan_objmgr_psoc *psoc,
 		cfg_get(psoc, CFG_SAP_TX_LEAKAGE_THRESHOLD);
 	dfs_cfg->dfs_pri_multiplier =
 		cfg_get(psoc, CFG_DFS_RADAR_PRI_MULTIPLIER);
-	dfs_cfg->dfs_discard_mode =
-		cfg_get(psoc, CFG_DISCARD_DFS_CHANNEL_FOR_MODE);
-
 }
 
 static void mlme_init_feature_flag_in_cfg(
@@ -2017,11 +2034,12 @@ static void mlme_init_sap_protection_cfg(struct wlan_objmgr_psoc *psoc,
 #define HE_MCS12_13_24G_INDEX 0
 #define HE_MCS12_13_5G_INDEX 1
 #define HE_MCS12_13_BITS 16
+#define DISABLE_MCS_12_13_2G_40M 1
 
 static void mlme_init_he_cap_in_cfg(struct wlan_objmgr_psoc *psoc,
 				    struct wlan_mlme_cfg *mlme_cfg)
 {
-	uint32_t chan_width, mcs_12_13;
+	uint32_t chan_width, mcs_12_13, disable_mcs_12_13;
 	uint16_t value = 0;
 	struct wlan_mlme_he_caps *he_caps = &mlme_cfg->he_caps;
 	bool is_twt_enabled = false;
@@ -2220,6 +2238,12 @@ static void mlme_init_he_cap_in_cfg(struct wlan_objmgr_psoc *psoc,
 			     HE_MCS12_13_5G_INDEX * HE_MCS12_13_BITS,
 			     HE_MCS12_13_BITS);
 
+	disable_mcs_12_13 = cfg_get(psoc, CFG_DISABLE_MCS_12_13_SAP);
+
+	if (disable_mcs_12_13 & BIT(DISABLE_MCS_12_13_2G_40M))
+		mlme_cfg->he_caps.disable_sap_24g_40m_mcs_12_13 = true;
+	else
+		mlme_cfg->he_caps.disable_sap_24g_40m_mcs_12_13 = false;
 	mlme_cfg->he_caps.disable_sap_mcs_12_13 = cfg_get(psoc,
 						CFG_DISABLE_MCS_12_13_SAP);
 }
@@ -2410,8 +2434,6 @@ static void mlme_init_sap_cfg(struct wlan_objmgr_psoc *psoc,
 		cfg_get(psoc, CFG_DISABLE_SAP_BCN_PROT);
 	sap_cfg->sap_ps_with_twt_enable =
 		cfg_get(psoc, CFG_SAP_PS_WITH_TWT);
-	sap_cfg->sap_he_rx_mcs_map_160 =
-		cfg_get(psoc, CFG_SAP_HE_RX_MCS_MAP_160);
 }
 
 static void mlme_init_obss_ht40_cfg(struct wlan_objmgr_psoc *psoc,
@@ -2592,8 +2614,6 @@ static void mlme_init_sta_mlo_cfg(struct wlan_objmgr_psoc *psoc,
 		cfg_default(CFG_MLO_SAME_LINK_MLD_ADDR);
 	sta->mlo_5gl_5gh_mlsr =
 		cfg_get(psoc, CFG_MLO_MLO_5GL_5GH_MLSR);
-	sta->epcs_capability =
-		cfg_get(psoc, CFG_MLO_EPCS_SUPPORT_ENABLE);
 
 	mlme_debug("mlo_support_link_num: %d, mlo_support_link_band: 0x%x",
 		   sta->mlo_support_link_num, sta->mlo_support_link_band);
@@ -2811,8 +2831,7 @@ static void mlme_init_sta_cfg(struct wlan_objmgr_psoc *psoc,
 		cfg_get(psoc, CFG_MAX_LI_MODULATED_DTIM_MS);
 
 	mlme_init_sta_mlo_cfg(psoc, sta);
-	wlan_mlme_set_epcs_capability(psoc,
-				      wlan_mlme_get_epcs_capability(psoc));
+	wlan_mlme_set_epcs_capability(psoc, false);
 	wlan_mlme_set_usr_disable_sta_eht(psoc, false);
 	wlan_mlme_set_eht_disable_punct_in_us_lpi(psoc,
 						  cfg_default(CFG_EHT_DISABLE_PUNCT_IN_US_LPI));
@@ -3028,7 +3047,6 @@ mlme_init_bss_load_trigger_params(struct wlan_objmgr_psoc *psoc,
 	bss_load_trig->enabled =
 		cfg_get(psoc, CFG_ENABLE_BSS_LOAD_TRIGGERED_ROAM);
 	bss_load_trig->threshold = cfg_get(psoc, CFG_BSS_LOAD_THRESHOLD);
-	bss_load_trig->bss_load_alpha = cfg_get(psoc, CFG_BSS_LOAD_ALPHA);
 
 	ucfg_mlme_get_connection_roaming_ini_present(psoc, &val);
 	if (val)
@@ -4739,7 +4757,7 @@ wlan_get_op_chan_freq_info_vdev_id(struct wlan_objmgr_pdev *pdev,
 	 * If there is a failure or operating mode is not STA / P2P-CLI
 	 * then get channel width from wlan_channel.
 	 */
-	status = wlan_mlme_get_sta_ch_width(vdev, ch_width, NULL);
+	status = wlan_mlme_get_sta_ch_width(vdev, ch_width);
 	if (QDF_IS_STATUS_ERROR(status))
 		*ch_width = chan->ch_width;
 
@@ -4810,7 +4828,8 @@ QDF_STATUS wlan_strip_ie(uint8_t *addn_ie, uint16_t *addn_ielen,
 			 */
 			if (extracted_ie) {
 				ie_len = elem_len + size_of_len_field + 1;
-				if (ie_len <= eid_max_len - extracted_ie_len) {
+				if (ie_len <= (eid_max_len + size_of_len_field +
+					1 - extracted_ie_len)) {
 					qdf_mem_copy(
 					extracted_ie + extracted_ie_len,
 					&ptr[0], ie_len);

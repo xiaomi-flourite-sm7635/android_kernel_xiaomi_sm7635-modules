@@ -1,6 +1,7 @@
  /*
   * Goodix Touchscreen Driver
   * Copyright (C) 2020 - 2021 Goodix, Inc.
+  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
   *
   * This program is free software; you can redistribute it and/or modify
   * it under the terms of the GNU General Public License as published by
@@ -27,16 +28,15 @@
 #endif
 
 #include "goodix_ts_core.h"
-/* goodix fb test */
-// #include "../../../video/fbdev/core/fb_firefly.h"
 
 #define GOODIX_DEFAULT_CFG_NAME		"goodix_cfg_group.cfg"
+#define GOOIDX_INPUT_PHYS			"goodix_ts/input0"
 
 #if defined(CONFIG_DRM)
 static struct drm_panel *active_panel;
 static void goodix_panel_notifier_callback(enum panel_event_notifier_tag tag,
 		 struct panel_event_notification *event, void *client_data);
-
+static irqreturn_t  goodix_irq_handler(int irq, void *data);
 
 static void goodix_register_for_panel_events(struct device_node *dp,
 					struct goodix_ts_core *cd)
@@ -51,53 +51,260 @@ static void goodix_register_for_panel_events(struct device_node *dp,
 		return;
 	}
 
-	ts_debug("registered for panel notifications panel: 0x%x\n",
+	ts_debug("registered for panel notifications panel: 0x%pK\n",
 			active_panel);
 
 	cd->notifier_cookie = cookie;
 }
+
 #endif
 
-struct goodix_device_manager goodix_devices;
+struct goodix_module goodix_modules;
+int core_module_prob_sate = CORE_MODULE_UNPROBED;
+struct mutex goodix_later_init_tmutex;
 
-static void goodix_device_manager_init(void)
+int goodix_ts_esd_init(struct goodix_ts_core *cd);
+
+static int goodix_send_ic_config(struct goodix_ts_core *cd, int type);
+/**
+ * __do_register_ext_module - register external module
+ * to register into touch core modules structure
+ * return 0 on success, otherwise return < 0
+ */
+static int __do_register_ext_module(struct goodix_ext_module *module)
 {
-	if (goodix_devices.initilized)
-		return;
-	goodix_devices.initilized = true;
-	INIT_LIST_HEAD(&goodix_devices.list);
-	mutex_init(&goodix_devices.mutex);
-}
+	struct goodix_ext_module *ext_module, *next;
+	struct list_head *insert_point = &goodix_modules.head;
 
-static void goodix_device_manager_exit(void)
-{
-	struct goodix_device_resource *res, *next;
+	/* prority level *must* be set */
+	if (module->priority == EXTMOD_PRIO_RESERVED) {
+		ts_err("Priority of module [%s] needs to be set",
+			module->name);
+		return -EINVAL;
+	}
+	mutex_lock(&goodix_modules.mutex);
+	/* find insert point for the specified priority */
+	if (!list_empty(&goodix_modules.head)) {
+		list_for_each_entry_safe(ext_module, next,
+					 &goodix_modules.head, list) {
+			if (ext_module == module) {
+				ts_info("Module [%s] already exists",
+					module->name);
+				mutex_unlock(&goodix_modules.mutex);
+				return 0;
+			}
+		}
 
-	if (!list_empty(&goodix_devices.list)) {
-		list_for_each_entry_safe(res, next, &goodix_devices.list, list) {
-			platform_device_unregister(&res->pdev);
-			kfree(res);
+		/* smaller priority value with higher priority level */
+		list_for_each_entry_safe(ext_module, next,
+					 &goodix_modules.head, list) {
+			if (ext_module->priority >= module->priority) {
+				insert_point = &ext_module->list;
+				break;
+			}
 		}
 	}
-}
 
-int goodix_device_register(struct goodix_device_resource *device)
-{
-	if (!device)
-		return -ENXIO;
+	if (module->funcs && module->funcs->init) {
+		if (module->funcs->init(goodix_modules.core_data,
+					module) < 0) {
+			ts_err("Module [%s] init error",
+				module->name ? module->name : " ");
+			mutex_unlock(&goodix_modules.mutex);
+			return -EFAULT;
+		}
+	}
 
-	mutex_lock(&goodix_devices.mutex);
-	list_add(&device->list, &goodix_devices.list);
-	device->id = goodix_devices.nums++;
-	sprintf(device->name, "%s.%d", GOODIX_CORE_DRIVER_NAME, device->id);
-	mutex_unlock(&goodix_devices.mutex);
-	ts_info("register device %s", device->name);
+	list_add(&module->list, insert_point->prev);
+	mutex_unlock(&goodix_modules.mutex);
 
+	ts_info("Module [%s] registered,priority:%u", module->name,
+		module->priority);
 	return 0;
 }
 
-static int goodix_send_ic_config(struct goodix_ts_core *cd, int type);
+static void goodix_register_ext_module_work(struct work_struct *work)
+{
+	struct goodix_ext_module *module =
+			container_of(work, struct goodix_ext_module, work);
 
+	ts_info("module register work IN");
+
+	/* driver probe failed */
+	if (core_module_prob_sate != CORE_MODULE_PROB_SUCCESS) {
+		ts_err("Can't register ext_module core error");
+		return;
+	}
+
+	if (__do_register_ext_module(module))
+		ts_err("failed register module: %s", module->name);
+	else
+		ts_info("success register module: %s", module->name);
+}
+
+static void goodix_core_module_init(void)
+{
+	if (goodix_modules.initilized)
+		return;
+	goodix_modules.initilized = true;
+	INIT_LIST_HEAD(&goodix_modules.head);
+	mutex_init(&goodix_modules.mutex);
+}
+
+/**
+ * goodix_register_ext_module - interface for register external module
+ * to the core. This will create a workqueue to finish the real register
+ * work and return immediately. The user need to check the final result
+ * to make sure registe is success or fail.
+ *
+ * @module: pointer to external module to be register
+ * return: 0 ok, <0 failed
+ */
+int goodix_register_ext_module(struct goodix_ext_module *module)
+{
+	if (!module)
+		return -EINVAL;
+
+	ts_info("IN");
+
+	goodix_core_module_init();
+	INIT_WORK(&module->work, goodix_register_ext_module_work);
+	schedule_work(&module->work);
+
+	ts_info("OUT");
+	return 0;
+}
+
+/**
+ * goodix_register_ext_module_no_wait
+ * return: 0 ok, <0 failed
+ */
+int goodix_register_ext_module_no_wait(struct goodix_ext_module *module)
+{
+	if (!module)
+		return -EINVAL;
+
+	ts_info("IN");
+	goodix_core_module_init();
+	/* driver probe failed */
+	if (core_module_prob_sate != CORE_MODULE_PROB_SUCCESS) {
+		ts_err("Can't register ext_module core error");
+		return -EINVAL;
+	}
+	return __do_register_ext_module(module);
+}
+
+/**
+ * goodix_unregister_ext_module - interface for external module
+ * to unregister external modules
+ *
+ * @module: pointer to external module
+ * return: 0 ok, <0 failed
+ */
+int goodix_unregister_ext_module(struct goodix_ext_module *module)
+{
+	struct goodix_ext_module *ext_module, *next;
+	bool found = false;
+
+	if (!module)
+		return -EINVAL;
+
+	if (!goodix_modules.initilized)
+		return -EINVAL;
+
+	if (!goodix_modules.core_data)
+		return -ENODEV;
+
+	mutex_lock(&goodix_modules.mutex);
+	if (!list_empty(&goodix_modules.head)) {
+		list_for_each_entry_safe(ext_module, next,
+					 &goodix_modules.head, list) {
+			if (ext_module == module) {
+				found = true;
+				break;
+			}
+		}
+	} else {
+		mutex_unlock(&goodix_modules.mutex);
+		return 0;
+	}
+
+	if (!found) {
+		ts_debug("Module [%s] never registed",
+				module->name);
+		mutex_unlock(&goodix_modules.mutex);
+		return 0;
+	}
+
+	list_del(&module->list);
+	mutex_unlock(&goodix_modules.mutex);
+
+	if (module->funcs && module->funcs->exit)
+		module->funcs->exit(goodix_modules.core_data, module);
+
+	ts_info("Moudle [%s] unregistered",
+		module->name ? module->name : " ");
+	return 0;
+}
+
+static void goodix_ext_sysfs_release(struct kobject *kobj)
+{
+	ts_info("Kobject released!");
+}
+
+#define to_ext_module(kobj)	container_of(kobj,\
+				struct goodix_ext_module, kobj)
+#define to_ext_attr(attr)	container_of(attr,\
+				struct goodix_ext_attribute, attr)
+
+static ssize_t goodix_ext_sysfs_show(struct kobject *kobj,
+		struct attribute *attr, char *buf)
+{
+	struct goodix_ext_module *module = to_ext_module(kobj);
+	struct goodix_ext_attribute *ext_attr = to_ext_attr(attr);
+
+	if (ext_attr->show)
+		return ext_attr->show(module, buf);
+
+	return -EIO;
+}
+
+static ssize_t goodix_ext_sysfs_store(struct kobject *kobj,
+		struct attribute *attr, const char *buf, size_t count)
+{
+	struct goodix_ext_module *module = to_ext_module(kobj);
+	struct goodix_ext_attribute *ext_attr = to_ext_attr(attr);
+
+	if (ext_attr->store)
+		return ext_attr->store(module, buf, count);
+
+	return -EIO;
+}
+
+static const struct sysfs_ops goodix_ext_ops = {
+	.show = goodix_ext_sysfs_show,
+	.store = goodix_ext_sysfs_store
+};
+
+static struct kobj_type goodix_ext_ktype = {
+	.release = goodix_ext_sysfs_release,
+	.sysfs_ops = &goodix_ext_ops,
+};
+
+struct kobj_type *goodix_get_default_ktype(void)
+{
+	return &goodix_ext_ktype;
+}
+
+struct kobject *goodix_get_default_kobj(void)
+{
+	struct kobject *kobj = NULL;
+
+	if (goodix_modules.core_data &&
+			goodix_modules.core_data->pdev)
+		kobj = &goodix_modules.core_data->pdev->dev.kobj;
+	return kobj;
+}
 
 /* show driver infomation */
 static ssize_t driver_info_show(struct device *dev,
@@ -264,8 +471,8 @@ static int goodix_ts_convert_0x_data(const u8 *buf, int buf_size,
 
 /* send config */
 static ssize_t goodix_ts_send_cfg_store(struct device *dev,
-						struct device_attribute *attr,
-						const char *buf, size_t count)
+					struct device_attribute *attr,
+					const char *buf, size_t count)
 {
 	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
@@ -283,9 +490,8 @@ static ssize_t goodix_ts_send_cfg_store(struct device *dev,
 		ts_err("cfg file [%s] not available,errno:%d",
 			GOODIX_DEFAULT_CFG_NAME, ret);
 		goto exit;
-	} else {
+	} else
 		ts_info("cfg file [%s] is ready", GOODIX_DEFAULT_CFG_NAME);
-	}
 
 	config = kzalloc(sizeof(*config), GFP_KERNEL);
 	if (!config)
@@ -365,11 +571,11 @@ static ssize_t goodix_ts_reg_rw_store(struct device *dev,
 		goto err_out;
 	}
 
-	if (buf[0] == 'r') {
+	if (buf[0] == 'r')
 		rw_flag = 1;
-	} else if (buf[0] == 'w') {
+	else if (buf[0] == 'w')
 		rw_flag = 2;
-	} else {
+	else {
 		ts_err("string must start with 'r/w'");
 		goto err_out;
 	}
@@ -459,15 +665,13 @@ static ssize_t goodix_ts_irq_info_show(struct device *dev,
 
 	offset += r;
 	r = snprintf(&buf[offset], PAGE_SIZE - offset, "state:%s\n",
-		     atomic_read(&core_data->irq_enabled) ?
-		     "enabled" : "disabled");
+			atomic_read(&core_data->irq_enabled) ? "enabled" : "disabled");
 	if (r < 0)
 		return -EINVAL;
 
 	desc = irq_to_desc(core_data->irq);
 	offset += r;
-	r = snprintf(&buf[offset], PAGE_SIZE - offset, "disable-depth:%d\n",
-		     desc->depth);
+	r = snprintf(&buf[offset], PAGE_SIZE - offset, "disable-depth:%d\n", desc->depth);
 	if (r < 0)
 		return -EINVAL;
 
@@ -515,8 +719,7 @@ static ssize_t goodix_ts_esd_info_show(struct device *dev,
 	int r = 0;
 
 	r = snprintf(buf, PAGE_SIZE, "state:%s\n",
-		     atomic_read(&ts_esd->esd_on) ?
-		     "enabled" : "disabled");
+			atomic_read(&ts_esd->esd_on) ? "enabled" : "disabled");
 
 	return r;
 }
@@ -526,28 +729,31 @@ static ssize_t goodix_ts_esd_info_store(struct device *dev,
 					struct device_attribute *attr,
 					const char *buf, size_t count)
 {
-	struct goodix_ts_core *cd = dev_get_drvdata(dev);
+	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
 
 	if (!buf || count <= 0)
 		return -EINVAL;
 
-	if (buf[0] != '0')
-		goodix_ts_esd_on(cd);
-	else
-		goodix_ts_esd_off(cd);
+	if (buf[0] != '0') {
+		if (!core_data->esd_initialized)
+			goodix_ts_esd_init(core_data);
+		goodix_ts_blocking_notify(NOTIFY_ESD_ON, NULL);
+	} else if (core_data->esd_initialized) {
+		goodix_ts_blocking_notify(NOTIFY_ESD_OFF, NULL);
+	}
+
 	return count;
 }
 
 /* debug level show */
 static ssize_t goodix_ts_debug_log_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buf)
+					struct device_attribute *attr,
+					char *buf)
 {
 	int r = 0;
 
 	r = snprintf(buf, PAGE_SIZE, "state:%s\n",
-		    debug_log_flag ?
-		    "enabled" : "disabled");
+			debug_log_flag ? "enabled" : "disabled");
 
 	return r;
 }
@@ -564,93 +770,6 @@ static ssize_t goodix_ts_debug_log_store(struct device *dev,
 		debug_log_flag = true;
 	else
 		debug_log_flag = false;
-	return count;
-}
-
-static int goodix_refresh_pen_pair(struct goodix_ts_core *cd)
-{
-	struct goodix_ble_data *ble_data = &cd->ble_data;
-	u8 checksum = 0;
-	int i;
-
-	mutex_lock(&ble_data->lock);
-	ble_data->cmd.cmd = 0xC5;
-	ble_data->cmd.len = 5;
-	ble_data->cmd.data[0] = 1;
-	ble_data->cmd.data[1] = ble_data->tx1_freq_index;
-	ble_data->cmd.data[2] = ble_data->tx2_freq_index;
-	ble_data->cmd.data[3] = 0;
-	ble_data->cmd.data[4] = 0;
-	for (i = 0; i < 7; i++)
-		checksum += ble_data->cmd.buf[i];
-	ble_data->cmd.data[5] = checksum;
-	mutex_unlock(&ble_data->lock);
-	sysfs_notify(&cd->pdev->dev.kobj, NULL, "pen_get");
-	ts_info("pen pair event");
-	return 0;
-}
-
-/* debug level show */
-static ssize_t goodix_ts_pen_get_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buf)
-{
-	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
-	struct goodix_ble_data *ble_data = &core_data->ble_data;
-
-	mutex_lock(&ble_data->lock);
-	memcpy(buf, ble_data->cmd.buf, sizeof(ble_data->cmd));
-	mutex_unlock(&ble_data->lock);
-	return sizeof(ble_data->cmd);
-}
-
-/* debug level store */
-static ssize_t goodix_ts_pen_debug_store(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf, size_t count)
-{
-	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
-
-	sysfs_notify(&core_data->pdev->dev.kobj, NULL, "pen_get");
-	return count;
-}
-
-static ssize_t goodix_ts_pen_set_store(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf, size_t count)
-{
-	struct goodix_ts_core *core_data = dev_get_drvdata(dev);
-	struct goodix_ble_data *ble_data = &core_data->ble_data;
-	struct goodix_ble_cmd temp_cmd;
-	struct goodix_ts_cmd cmd;
-
-	if (count > sizeof(temp_cmd)) {
-		ts_err("data count to long");
-		return -EINVAL;
-	}
-	ts_debug("get ble cmd:%*ph", (int)count, buf);
-
-	mutex_lock(&ble_data->lock);
-	memcpy(temp_cmd.buf, buf, count);
-	switch (temp_cmd.cmd) {
-	case 0x4B:
-		ble_data->pressure = (temp_cmd.data[1] << 8) | temp_cmd.data[0];
-		ble_data->hogp_ready = 1;
-		break;
-	case 0xC4:
-		cmd.cmd = 0xAA;
-		cmd.len = 6;
-		cmd.data[0] = temp_cmd.data[1];
-		cmd.data[1] = temp_cmd.data[2];
-		core_data->hw_ops->send_cmd(core_data, &cmd);
-		cmd.cmd = 0xBB;
-		cmd.len = 5;
-		cmd.data[0] = temp_cmd.data[4];
-		core_data->hw_ops->send_cmd(core_data, &cmd);
-		break;
-	}
-	mutex_unlock(&ble_data->lock);
-
 	return count;
 }
 
@@ -672,9 +791,6 @@ static DEVICE_ATTR(esd_info, 0664,
 		goodix_ts_esd_info_show, goodix_ts_esd_info_store);
 static DEVICE_ATTR(debug_log, 0664,
 		goodix_ts_debug_log_show, goodix_ts_debug_log_store);
-static DEVICE_ATTR(pen_get, 0440, goodix_ts_pen_get_show, NULL);
-static DEVICE_ATTR(pen_debug, 0220, NULL, goodix_ts_pen_debug_store);
-static DEVICE_ATTR(pen_set, 0220, NULL, goodix_ts_pen_set_store);
 
 static struct attribute *sysfs_attrs[] = {
 	&dev_attr_driver_info.attr,
@@ -686,9 +802,6 @@ static struct attribute *sysfs_attrs[] = {
 	&dev_attr_irq_info.attr,
 	&dev_attr_esd_info.attr,
 	&dev_attr_debug_log.attr,
-	&dev_attr_pen_get.attr,
-	&dev_attr_pen_debug.attr,
-	&dev_attr_pen_set.attr,
 	NULL,
 };
 
@@ -763,13 +876,13 @@ exit:
 
 static int rawdata_proc_open(struct inode *inode, struct file *file)
 {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0))
-	return single_open_size(file, rawdata_proc_show,
+	#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 19, 0))
+		return single_open_size(file, rawdata_proc_show,
 			pde_data(inode), PAGE_SIZE * 10);
-#else
-	return single_open_size(file, rawdata_proc_show,
+	#else
+		return single_open_size(file, rawdata_proc_show,
 			PDE_DATA(inode), PAGE_SIZE * 10);
-#endif
+	#endif
 }
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0))
@@ -790,36 +903,58 @@ static const struct file_operations rawdata_proc_fops = {
 
 static void goodix_ts_procfs_init(struct goodix_ts_core *core_data)
 {
-	int dev_id = core_data->pdev->id;
 	struct proc_dir_entry *proc_entry;
-	char proc_node[32] = {0};
 
-	sprintf(proc_node, "goodix_ts.%d", dev_id);
-
-	core_data->proc_dir_entry = proc_mkdir(proc_node, NULL);
-	if (!core_data->proc_dir_entry)
+	if (!proc_mkdir("goodix_ts", NULL))
 		return;
-	proc_entry = proc_create_data("tp_capacitance_data",
-			0664, core_data->proc_dir_entry, &rawdata_proc_fops, core_data);
+	proc_entry = proc_create_data("goodix_ts/tp_capacitance_data",
+			0664, NULL, &rawdata_proc_fops, core_data);
 	if (!proc_entry)
 		ts_err("failed to create proc entry");
-
-	driver_test_proc_init(core_data);
 }
 
 static void goodix_ts_procfs_exit(struct goodix_ts_core *core_data)
 {
-	int dev_id = core_data->pdev->id;
-	char proc_node[32] = {0};
-
-	sprintf(proc_node, "goodix_ts.%d", dev_id);
-
-	driver_test_proc_remove(core_data);
-	remove_proc_entry("tp_capacitance_data", core_data->proc_dir_entry);
-	remove_proc_entry(proc_node, NULL);
+	remove_proc_entry("goodix_ts/tp_capacitance_data", NULL);
+	remove_proc_entry("goodix_ts", NULL);
 }
 
-#if defined(CONFIG_OF)
+/* event notifier */
+static BLOCKING_NOTIFIER_HEAD(ts_notifier_list);
+/**
+ * goodix_ts_register_client - register a client notifier
+ * @nb: notifier block to callback on events
+ *  see enum ts_notify_event in goodix_ts_core.h
+ */
+static int goodix_ts_register_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&ts_notifier_list, nb);
+}
+
+/**
+ * goodix_ts_unregister_client - unregister a client notifier
+ * @nb: notifier block to callback on events
+ *	see enum ts_notify_event in goodix_ts_core.h
+ */
+static int goodix_ts_unregister_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&ts_notifier_list, nb);
+}
+
+/**
+ * fb_notifier_call_chain - notify clients of fb_events
+ *	see enum ts_notify_event in goodix_ts_core.h
+ */
+int goodix_ts_blocking_notify(enum ts_notify_event evt, void *v)
+{
+	int ret;
+
+	ret = blocking_notifier_call_chain(&ts_notifier_list,
+			(unsigned long)evt, v);
+	return ret;
+}
+
+#if IS_ENABLED(CONFIG_OF)
 /**
  * goodix_parse_dt_resolution - parse resolution from dt
  * @node: devicetree node
@@ -832,28 +967,35 @@ static int goodix_parse_dt_resolution(struct device_node *node,
 	int ret;
 
 	ret = of_property_read_u32(node, "goodix,panel-max-x",
-				 &board_data->panel_max_x);
+				&board_data->panel_max_x);
 	if (ret) {
 		ts_err("failed get panel-max-x");
 		return ret;
 	}
 
 	ret = of_property_read_u32(node, "goodix,panel-max-y",
-				 &board_data->panel_max_y);
+				&board_data->panel_max_y);
 	if (ret) {
 		ts_err("failed get panel-max-y");
 		return ret;
 	}
 
+	board_data->invert_xy = of_property_read_bool(node,
+					"invert_xy");
+	if (board_data->invert_xy) {
+		swap(board_data->panel_max_x, board_data->panel_max_y);
+		ts_info("Panel max x and max y inverted\n");
+	}
+
 	ret = of_property_read_u32(node, "goodix,panel-max-w",
-				 &board_data->panel_max_w);
+				&board_data->panel_max_w);
 	if (ret) {
 		ts_err("failed get panel-max-w");
 		return ret;
 	}
 
 	ret = of_property_read_u32(node, "goodix,panel-max-p",
-				 &board_data->panel_max_p);
+				&board_data->panel_max_p);
 	if (ret) {
 		ts_err("failed get panel-max-p, use default");
 		board_data->panel_max_p = GOODIX_PEN_MAX_PRESSURE;
@@ -897,6 +1039,7 @@ static int goodix_parse_dt(struct device_node *node,
 		board_data->iovdd_gpio = r;
 	}
 
+#ifndef CONFIG_ARCH_QTI_VM
 	r = of_get_named_gpio(node, "goodix,reset-gpio", 0);
 	if (r < 0) {
 		ts_err("invalid reset-gpio in dt: %d", r);
@@ -919,13 +1062,14 @@ static int goodix_parse_dt(struct device_node *node,
 		ts_err("invalid irq-flags");
 		return -EINVAL;
 	}
+#endif
 
 	memset(board_data->avdd_name, 0, sizeof(board_data->avdd_name));
 	r = of_property_read_string(node, "goodix,avdd-name", &name_tmp);
 	if (!r) {
 		ts_info("avdd name from dt: %s", name_tmp);
 		if (strlen(name_tmp) < sizeof(board_data->avdd_name))
-			strncpy(board_data->avdd_name,
+			strscpy(board_data->avdd_name,
 				name_tmp, sizeof(board_data->avdd_name));
 		else
 			ts_info("invalied avdd name length: %ld > %ld",
@@ -938,7 +1082,7 @@ static int goodix_parse_dt(struct device_node *node,
 	if (!r) {
 		ts_info("iovdd name from dt: %s", name_tmp);
 		if (strlen(name_tmp) < sizeof(board_data->iovdd_name))
-			strncpy(board_data->iovdd_name,
+			strscpy(board_data->iovdd_name,
 				name_tmp, sizeof(board_data->iovdd_name));
 		else
 			ts_info("invalied iovdd name length: %ld > %ld",
@@ -946,40 +1090,32 @@ static int goodix_parse_dt(struct device_node *node,
 				sizeof(board_data->iovdd_name));
 	}
 
-	/* get use-one-binary flag */
-	board_data->use_one_binary = of_property_read_bool(node,
-			"goodix,use-one-binary");
-	if (board_data->use_one_binary)
-		ts_info("use one binary");
-
 	/* get firmware file name */
 	r = of_property_read_string(node, "goodix,firmware-name", &name_tmp);
 	if (!r) {
 		ts_info("firmware name from dt: %s", name_tmp);
-		strncpy(board_data->fw_name,
+		strscpy(board_data->fw_name,
 				name_tmp, sizeof(board_data->fw_name));
 	} else {
 		ts_info("can't find firmware name, use default: %s",
 				TS_DEFAULT_FIRMWARE);
-		strncpy(board_data->fw_name,
+		strscpy(board_data->fw_name,
 				TS_DEFAULT_FIRMWARE,
 				sizeof(board_data->fw_name));
 	}
 
 	/* get config file name */
-	if (!board_data->use_one_binary) {
-		r = of_property_read_string(node, "goodix,config-name", &name_tmp);
-		if (!r) {
-			ts_info("config name from dt: %s", name_tmp);
-			strncpy(board_data->cfg_bin_name, name_tmp,
-					sizeof(board_data->cfg_bin_name));
-		} else {
-			ts_info("can't find config name, use default: %s",
-					TS_DEFAULT_CFG_BIN);
-			strncpy(board_data->cfg_bin_name,
-					TS_DEFAULT_CFG_BIN,
-					sizeof(board_data->cfg_bin_name));
-		}
+	r = of_property_read_string(node, "goodix,config-name", &name_tmp);
+	if (!r) {
+		ts_info("config name from dt: %s", name_tmp);
+		strscpy(board_data->cfg_bin_name, name_tmp,
+				sizeof(board_data->cfg_bin_name));
+	} else {
+		ts_info("can't find config name, use default: %s",
+				TS_DEFAULT_CFG_BIN);
+		strscpy(board_data->cfg_bin_name,
+				TS_DEFAULT_CFG_BIN,
+				sizeof(board_data->cfg_bin_name));
 	}
 
 	/* get xyz resolutions */
@@ -989,21 +1125,16 @@ static int goodix_parse_dt(struct device_node *node,
 		return r;
 	}
 
-	/* get sleep mode flag */
-	board_data->sleep_enable = of_property_read_bool(node,
-			"goodix,sleep-enable");
 
 	/*get pen-enable switch and pen keys, must after "key map"*/
 	board_data->pen_enable = of_property_read_bool(node,
-			"goodix,pen-enable");
+					"goodix,pen-enable");
+	if (board_data->pen_enable)
+		ts_info("goodix pen enabled");
 
-	board_data->noise_test_disable_cmd = of_property_read_bool(node,
-			"goodix,noise-test-disable-cmd");
-
-	ts_info("[DT]x:%d, y:%d, w:%d, p:%d sleep_enable:%d pen_enable:%d",
-		board_data->panel_max_x, board_data->panel_max_y,
-		board_data->panel_max_w, board_data->panel_max_p,
-		board_data->sleep_enable, board_data->pen_enable);
+	ts_debug("[DT]x:%d, y:%d, w:%d, p:%d", board_data->panel_max_x,
+		 board_data->panel_max_y, board_data->panel_max_w,
+		 board_data->panel_max_p);
 	return 0;
 }
 #endif
@@ -1012,34 +1143,15 @@ static void goodix_ts_report_pen(struct input_dev *dev,
 		struct goodix_pen_data *pen_data)
 {
 	int i;
-	struct goodix_ts_core *cd = input_get_drvdata(dev);
-	struct goodix_ble_data *ble_data = &cd->ble_data;
 
 	mutex_lock(&dev->mutex);
 
 	if (pen_data->coords.status == TS_TOUCH) {
-		if (pen_data->is_hover)
-			input_report_key(dev, BTN_TOUCH, 0);
-		else
-			input_report_key(dev, BTN_TOUCH, 1);
-		input_report_key(dev, BTN_TOOL_PEN, 1);
+		input_report_key(dev, BTN_TOUCH, 1);
+		input_report_key(dev, pen_data->coords.tool_type, 1);
 		input_report_abs(dev, ABS_X, pen_data->coords.x);
 		input_report_abs(dev, ABS_Y, pen_data->coords.y);
-		mutex_lock(&ble_data->lock);
-		if (ble_data->hogp_ready) {
-			cd->pen_pressure = ble_data->pressure;
-			ts_debug("update pen pressure from ble %d", cd->pen_pressure);
-		}
-		ble_data->hogp_ready = 0;
-		mutex_unlock(&ble_data->lock);
-
-		if (pen_data->coords.p && cd->pen_pressure)
-			pen_data->coords.p = cd->pen_pressure;
 		input_report_abs(dev, ABS_PRESSURE, pen_data->coords.p);
-		if (pen_data->coords.p == 0)
-			input_report_abs(dev, ABS_DISTANCE, 1);
-		else
-			input_report_abs(dev, ABS_DISTANCE, 0);
 		input_report_abs(dev, ABS_TILT_X, pen_data->coords.tilt_x);
 		input_report_abs(dev, ABS_TILT_Y, pen_data->coords.tilt_y);
 		ts_debug("pen_data:x %d, y %d, p %d, tilt_x %d tilt_y %d key[%d %d]",
@@ -1048,19 +1160,9 @@ static void goodix_ts_report_pen(struct input_dev *dev,
 				pen_data->coords.tilt_y,
 				pen_data->keys[0].status == TS_TOUCH ? 1 : 0,
 				pen_data->keys[1].status == TS_TOUCH ? 1 : 0);
-
-		if (pen_data->custom_flag) {
-			if (ble_data->tx1_freq_index != pen_data->tx1_freq_index ||
-					ble_data->tx2_freq_index != pen_data->tx2_freq_index) {
-				ble_data->tx1_freq_index = pen_data->tx1_freq_index;
-				ble_data->tx2_freq_index = pen_data->tx2_freq_index;
-				goodix_refresh_pen_pair(cd);
-			}
-		}
 	} else {
-		cd->pen_pressure = 0;
 		input_report_key(dev, BTN_TOUCH, 0);
-		input_report_key(dev, BTN_TOOL_PEN, 0);
+		input_report_key(dev, pen_data->coords.tool_type, 0);
 	}
 	/* report pen button */
 	for (i = 0; i < GOODIX_MAX_PEN_KEY; i++) {
@@ -1075,7 +1177,8 @@ static void goodix_ts_report_pen(struct input_dev *dev,
 }
 
 static void goodix_ts_report_finger(struct input_dev *dev,
-		struct goodix_touch_data *touch_data)
+		struct goodix_touch_data *touch_data,
+		bool invert_xy)
 {
 	unsigned int touch_num = touch_data->touch_num;
 	int i;
@@ -1084,32 +1187,23 @@ static void goodix_ts_report_finger(struct input_dev *dev,
 
 	for (i = 0; i < GOODIX_MAX_TOUCH; i++) {
 		if (touch_data->coords[i].status == TS_TOUCH) {
-			ts_debug("report: id[%d], x %d, y %d, w %d, p %d, major %d, minor %d, angle %d", i,
+			ts_debug("report: id[%d], x %d, y %d, w %d", i,
 				touch_data->coords[i].x,
 				touch_data->coords[i].y,
-				touch_data->coords[i].w,
-				touch_data->coords[i].p,
-				touch_data->coords[i].major,
-				touch_data->coords[i].minor,
-				touch_data->coords[i].angle);
+				touch_data->coords[i].w);
+
+			if (invert_xy)
+				swap(touch_data->coords[i].x,
+						touch_data->coords[i].y);
+
 			input_mt_slot(dev, i);
 			input_mt_report_slot_state(dev, MT_TOOL_FINGER, true);
-			input_report_abs(dev, ABS_MT_TOUCH_MAJOR, 20);
 			input_report_abs(dev, ABS_MT_POSITION_X,
 					touch_data->coords[i].x);
 			input_report_abs(dev, ABS_MT_POSITION_Y,
 					touch_data->coords[i].y);
-			input_report_abs(dev, ABS_MT_PRESSURE,
+			input_report_abs(dev, ABS_MT_TOUCH_MAJOR,
 					touch_data->coords[i].w);
-			// input_report_abs(dev, ABS_MT_PRESSURE,
-			// 		touch_data->coords[i].p);
-			// input_report_abs(dev, ABS_MT_TOUCH_MAJOR,
-			// 		// touch_data->coords[i].major);
-			// 		touch_data->coords[i].w);
-			input_report_abs(dev, ABS_MT_TOUCH_MINOR,
-					touch_data->coords[i].minor);
-			input_report_abs(dev, ABS_MT_ORIENTATION,
-					touch_data->coords[i].angle);
 		} else {
 			input_mt_slot(dev, i);
 			input_mt_report_slot_state(dev, MT_TOOL_FINGER, false);
@@ -1132,48 +1226,16 @@ static int goodix_ts_request_handle(struct goodix_ts_core *cd,
 		ret = goodix_send_ic_config(cd, CONFIG_TYPE_NORMAL);
 	else if (ts_event->request_code == REQUEST_TYPE_RESET)
 		ret = hw_ops->reset(cd, GOODIX_NORMAL_RESET_DELAY_MS);
-	else if (ts_event->request_code == REQUEST_TYPE_UPDATE)
-		ret = goodix_do_fw_update(cd, UPDATE_MODE_FORCE | UPDATE_MODE_BLOCK |
-			UPDATE_MODE_SRC_REQUEST);
 	else
 		ts_info("can not handle request type 0x%x",
-			  ts_event->request_code);
+			ts_event->request_code);
 	if (ret)
 		ts_err("failed handle request 0x%x",
-			 ts_event->request_code);
+			ts_event->request_code);
 	else
 		ts_info("success handle ic request 0x%x",
-			  ts_event->request_code);
+			ts_event->request_code);
 	return ret;
-}
-
-void goodix_ts_report_status(struct goodix_ts_event *ts_event)
-{
-	struct goodix_status_data *st = &ts_event->status_data;
-	int i;
-	u8 checksum = 0;
-	int len = sizeof(ts_event->status_data);
-	u8 *data = (u8 *)st;
-
-	for (i = 0; i < len - 1; i++)
-		checksum += data[i];
-	if (checksum != st->checksum) {
-		ts_err("status data checksum error");
-		return;
-	}
-
-	ts_info("others_change[%d] grip_change[%d] noise_lv_change[%d] palm_change[%d]"
-			"soft_reset[%d] base_update[%d] hop_change[%d] water_change[%d]",
-			st->others_change, st->grip_change, st->noise_lv_change, st->palm_change,
-			st->soft_reset, st->base_update, st->hop_change, st->water_change);
-	ts_info("water_status[%d] before_factorA[%d] after_factorA[%d] base_update_type[0x%x]\n"
-			"soft_reset_type[0x%x] palm_status[%d] noise_lv[%d] grip_type[%d] fold_sta[%d]\n"
-			"wireless_mode[%d] fw_sta[%x] sys_cmd[%x] fw_hs_ns[%x] hsync_err[%x] event_id[%d]",
-			st->water_sta, st->before_factorA, st->after_factorA,
-			st->base_update_type, st->soft_reset_type,
-			st->palm_sta, st->noise_lv, st->grip_type,
-			st->fold_sta, st->wireless_mode, st->fw_sta,
-			st->sys_cmd, st->fw_hs_ns, st->hsync_error, st->event_id);
 }
 
 /**
@@ -1188,36 +1250,45 @@ static irqreturn_t goodix_ts_threadirq_func(int irq, void *data)
 {
 	struct goodix_ts_core *core_data = data;
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
+	struct goodix_ext_module *ext_module, *next;
 	struct goodix_ts_event *ts_event = &core_data->ts_event;
 	struct goodix_ts_esd *ts_esd = &core_data->ts_esd;
 	int ret;
 
-	disable_irq_nosync(core_data->irq);
 	ts_esd->irq_status = true;
 	core_data->irq_trig_cnt++;
+	/* inform external module */
+	mutex_lock(&goodix_modules.mutex);
+	list_for_each_entry_safe(ext_module, next,
+				 &goodix_modules.head, list) {
+		if (!ext_module->funcs->irq_event)
+			continue;
+		ret = ext_module->funcs->irq_event(core_data, ext_module);
+		if (ret == EVT_CANCEL_IRQEVT) {
+			mutex_unlock(&goodix_modules.mutex);
+			return IRQ_HANDLED;
+		}
+	}
+	mutex_unlock(&goodix_modules.mutex);
 
 	/* read touch data from touch device */
 	ret = hw_ops->event_handler(core_data, ts_event);
 	if (likely(!ret)) {
-		if (ts_event->event_type & EVENT_TOUCH) {
+		if (ts_event->event_type == EVENT_TOUCH) {
 			/* report touch */
 			goodix_ts_report_finger(core_data->input_dev,
-					&ts_event->touch_data);
+					&ts_event->touch_data,
+					core_data->board_data.invert_xy);
 		}
 		if (core_data->board_data.pen_enable &&
-				ts_event->event_type & EVENT_PEN) {
+				ts_event->event_type == EVENT_PEN) {
 			goodix_ts_report_pen(core_data->pen_dev,
 					&ts_event->pen_data);
 		}
-		if (ts_event->event_type & EVENT_REQUEST)
+		if (ts_event->event_type == EVENT_REQUEST)
 			goodix_ts_request_handle(core_data, ts_event);
-		if (ts_event->event_type & EVENT_STATUS)
-			goodix_ts_report_status(ts_event);
-		if (ts_event->event_type & EVENT_GESTURE)
-			goodix_ts_report_gesture(core_data, ts_event);
 	}
 
-	enable_irq(core_data->irq);
 	return IRQ_HANDLED;
 }
 
@@ -1240,11 +1311,11 @@ static int goodix_ts_irq_setup(struct goodix_ts_core *core_data)
 
 	ts_info("IRQ:%u,flags:%d", core_data->irq, (int)ts_bdata->irq_flags);
 	ret = devm_request_threaded_irq(&core_data->pdev->dev,
-				      core_data->irq, NULL,
-				      goodix_ts_threadirq_func,
-				      ts_bdata->irq_flags | IRQF_ONESHOT,
-				      GOODIX_CORE_DRIVER_NAME,
-				      core_data);
+					core_data->irq, NULL,
+					goodix_irq_handler,
+					ts_bdata->irq_flags | IRQF_ONESHOT,
+					GOODIX_CORE_DRIVER_NAME,
+					core_data);
 	if (ret < 0)
 		ts_err("Failed to requeset threaded irq:%d", ret);
 	else
@@ -1266,17 +1337,15 @@ static int goodix_ts_power_init(struct goodix_ts_core *core_data)
 
 	ts_info("Power init");
 	if (strlen(ts_bdata->avdd_name)) {
-		core_data->avdd = devm_regulator_get(dev,
-				 ts_bdata->avdd_name);
+		core_data->avdd = devm_regulator_get(dev, ts_bdata->avdd_name);
 		if (IS_ERR_OR_NULL(core_data->avdd)) {
 			ret = PTR_ERR(core_data->avdd);
 			ts_err("Failed to get regulator avdd:%d", ret);
 			core_data->avdd = NULL;
 			return ret;
 		}
-	} else {
+	} else
 		ts_info("Avdd name is NULL");
-	}
 
 	if (strlen(ts_bdata->iovdd_name)) {
 		core_data->iovdd = devm_regulator_get(dev,
@@ -1286,9 +1355,8 @@ static int goodix_ts_power_init(struct goodix_ts_core *core_data)
 			ts_err("Failed to get regulator iovdd:%d", ret);
 			core_data->iovdd = NULL;
 		}
-	} else {
+	} else
 		ts_info("iovdd name is NULL");
-	}
 
 	return ret;
 }
@@ -1298,7 +1366,7 @@ static int goodix_ts_power_init(struct goodix_ts_core *core_data)
  * @core_data: pointer to touch core data
  * return: 0 ok, <0 failed
  */
-int goodix_ts_power_on(struct goodix_ts_core *cd)
+static int goodix_ts_power_on(struct goodix_ts_core *cd)
 {
 	int ret = 0;
 
@@ -1319,7 +1387,7 @@ int goodix_ts_power_on(struct goodix_ts_core *cd)
  * @core_data: pointer to touch core data
  * return: 0 ok, <0 failed
  */
-int goodix_ts_power_off(struct goodix_ts_core *cd)
+static int goodix_ts_power_off(struct goodix_ts_core *cd)
 {
 	int ret;
 
@@ -1401,9 +1469,6 @@ static int goodix_ts_input_dev_config(struct goodix_ts_core *core_data)
 {
 	struct goodix_ts_board_data *ts_bdata = board_data(core_data);
 	struct input_dev *input_dev = NULL;
-	int max_x = ts_bdata->panel_max_x;
-	int max_y = ts_bdata->panel_max_y;
-	int dev_id = core_data->pdev->id;
 	int r;
 
 	input_dev = input_allocate_device();
@@ -1415,13 +1480,12 @@ static int goodix_ts_input_dev_config(struct goodix_ts_core *core_data)
 	core_data->input_dev = input_dev;
 	input_set_drvdata(input_dev, core_data);
 
-	sprintf(core_data->input_name, "%s%d", GOODIX_CORE_DRIVER_NAME, dev_id);
-
-	input_dev->name = core_data->input_name;
-	input_dev->id.bustype = core_data->bus->bus_type;
-	input_dev->id.product = 0x0100 + dev_id;
-	input_dev->id.vendor = 0x27C6;
-	input_dev->id.version = 0x0100;
+	input_dev->name = GOODIX_CORE_DRIVER_NAME;
+	input_dev->phys = GOOIDX_INPUT_PHYS;
+	input_dev->id.product = 0xDEAD;
+	input_dev->id.vendor = 0xBEEF;
+	input_dev->id.version = 10427;
+	input_dev->dev.parent = core_data->bus->dev;
 
 	set_bit(EV_SYN, input_dev->evbit);
 	set_bit(EV_KEY, input_dev->evbit);
@@ -1430,25 +1494,13 @@ static int goodix_ts_input_dev_config(struct goodix_ts_core *core_data)
 	set_bit(BTN_TOOL_FINGER, input_dev->keybit);
 	set_bit(INPUT_PROP_DIRECT, input_dev->propbit);
 
-	if (core_data->ic_info.other.screen_max_x > 0 &&
-			core_data->ic_info.other.screen_max_y > 0) {
-		max_x = core_data->ic_info.other.screen_max_x;
-		max_y = core_data->ic_info.other.screen_max_y;
-	}
-
 	/* set input parameters */
 	input_set_abs_params(input_dev, ABS_MT_POSITION_X,
-			     0, max_x - 1, 0, 0);
+			     0, ts_bdata->panel_max_x, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_POSITION_Y,
-			     0, max_y - 1, 0, 0);
-	input_set_abs_params(input_dev, ABS_MT_PRESSURE,
-			     0, 255, 0, 0);
+			     0, ts_bdata->panel_max_y, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_TOUCH_MAJOR,
-			     0, 4096, 0, 0);
-	input_set_abs_params(input_dev, ABS_MT_TOUCH_MINOR,
-			     0, 4096, 0, 0);
-	input_set_abs_params(input_dev, ABS_MT_ORIENTATION,
-			     -90, 90, 0, 0);
+			     0, ts_bdata->panel_max_w, 0, 0);
 #ifdef INPUT_TYPE_B_PROTOCOL
 #if LINUX_VERSION_CODE > KERNEL_VERSION(3, 7, 0)
 	input_mt_init_slots(input_dev, GOODIX_MAX_TOUCH,
@@ -1476,7 +1528,6 @@ static int goodix_ts_pen_dev_config(struct goodix_ts_core *core_data)
 {
 	struct goodix_ts_board_data *ts_bdata = board_data(core_data);
 	struct input_dev *pen_dev = NULL;
-	int dev_id = core_data->pdev->id;
 	int r;
 
 	pen_dev = input_allocate_device();
@@ -1488,12 +1539,10 @@ static int goodix_ts_pen_dev_config(struct goodix_ts_core *core_data)
 	core_data->pen_dev = pen_dev;
 	input_set_drvdata(pen_dev, core_data);
 
-	sprintf(core_data->input_pen_name, "%s%d%s", GOODIX_CORE_DRIVER_NAME, dev_id, ",pen");
-	pen_dev->name = core_data->input_pen_name;
-	pen_dev->id.bustype = core_data->bus->bus_type;
-	pen_dev->id.product = 0x0200 + dev_id;
-	pen_dev->id.vendor = 0x27C6;
-	pen_dev->id.version = 0x0100;
+	pen_dev->name = GOODIX_PEN_DRIVER_NAME;
+	pen_dev->id.product = 0xDEAD;
+	pen_dev->id.vendor = 0xBEEF;
+	pen_dev->id.version = 10427;
 
 	pen_dev->evbit[0] |= BIT_MASK(EV_KEY) | BIT_MASK(EV_ABS);
 	set_bit(ABS_X, pen_dev->absbit);
@@ -1508,15 +1557,11 @@ static int goodix_ts_pen_dev_config(struct goodix_ts_core *core_data)
 	input_set_abs_params(pen_dev, ABS_X, 0, ts_bdata->panel_max_x, 0, 0);
 	input_set_abs_params(pen_dev, ABS_Y, 0, ts_bdata->panel_max_y, 0, 0);
 	input_set_abs_params(pen_dev, ABS_PRESSURE, 0,
-			     ts_bdata->panel_max_p, 0, 0);
-	input_set_abs_params(pen_dev, ABS_DISTANCE, 0, 255, 0, 0);
+			ts_bdata->panel_max_p, 0, 0);
 	input_set_abs_params(pen_dev, ABS_TILT_X,
 			-GOODIX_PEN_MAX_TILT, GOODIX_PEN_MAX_TILT, 0, 0);
 	input_set_abs_params(pen_dev, ABS_TILT_Y,
 			-GOODIX_PEN_MAX_TILT, GOODIX_PEN_MAX_TILT, 0, 0);
-
-	core_data->ble_data.tx1_freq_index = 0xFF;
-	core_data->ble_data.tx2_freq_index = 0xFF;
 
 	r = input_register_device(pen_dev);
 	if (r < 0) {
@@ -1528,7 +1573,7 @@ static int goodix_ts_pen_dev_config(struct goodix_ts_core *core_data)
 	return 0;
 }
 
-void goodix_ts_input_dev_remove(struct goodix_ts_core *core_data)
+static void goodix_ts_input_dev_remove(struct goodix_ts_core *core_data)
 {
 	if (!core_data->input_dev)
 		return;
@@ -1537,11 +1582,10 @@ void goodix_ts_input_dev_remove(struct goodix_ts_core *core_data)
 	core_data->input_dev = NULL;
 }
 
-void goodix_ts_pen_dev_remove(struct goodix_ts_core *core_data)
+static void goodix_ts_pen_dev_remove(struct goodix_ts_core *core_data)
 {
 	if (!core_data->pen_dev)
 		return;
-	mutex_destroy(&core_data->ble_data.lock);
 	input_unregister_device(core_data->pen_dev);
 	input_free_device(core_data->pen_dev);
 	core_data->pen_dev = NULL;
@@ -1564,7 +1608,7 @@ static void goodix_ts_esd_work(struct work_struct *work)
 	if (ts_esd->irq_status)
 		goto exit;
 
-	if (!atomic_read(&ts_esd->esd_on) || atomic_read(&cd->suspended))
+	if (!atomic_read(&ts_esd->esd_on))
 		return;
 
 	if (!hw_ops->esd_check)
@@ -1573,22 +1617,9 @@ static void goodix_ts_esd_work(struct work_struct *work)
 	ret = hw_ops->esd_check(cd);
 	if (ret) {
 		ts_err("esd check failed");
-		gpio_direction_output(cd->board_data.reset_gpio, 0);
-		if (cd->iovdd)
-			ret = regulator_disable(cd->iovdd);
-		if (cd->avdd)
-			ret = regulator_disable(cd->avdd);
-
+		goodix_ts_power_off(cd);
 		usleep_range(5000, 5100);
-
-		if (cd->iovdd) {
-			ret = regulator_enable(cd->iovdd);
-			usleep_range(3000, 3100);
-		}
-		if (cd->avdd)
-			ret = regulator_enable(cd->avdd);
-		usleep_range(15000, 15100);
-		gpio_direction_output(cd->board_data.reset_gpio, 1);
+		goodix_ts_power_on(cd);
 	}
 
 exit:
@@ -1600,7 +1631,7 @@ exit:
 /**
  * goodix_ts_esd_on - turn on esd protection
  */
-void goodix_ts_esd_on(struct goodix_ts_core *cd)
+static void goodix_ts_esd_on(struct goodix_ts_core *cd)
 {
 	struct goodix_ic_info_misc *misc = &cd->ic_info.misc;
 	struct goodix_ts_esd *ts_esd = &cd->ts_esd;
@@ -1621,7 +1652,7 @@ void goodix_ts_esd_on(struct goodix_ts_core *cd)
 /**
  * goodix_ts_esd_off - turn off esd protection
  */
-void goodix_ts_esd_off(struct goodix_ts_core *cd)
+static void goodix_ts_esd_off(struct goodix_ts_core *cd)
 {
 	struct goodix_ts_esd *ts_esd = &cd->ts_esd;
 	int ret;
@@ -1632,6 +1663,40 @@ void goodix_ts_esd_off(struct goodix_ts_core *cd)
 	atomic_set(&ts_esd->esd_on, 0);
 	ret = cancel_delayed_work_sync(&ts_esd->esd_work);
 	ts_info("Esd off, esd work state %d", ret);
+}
+
+/**
+ * goodix_esd_notifier_callback - notification callback
+ *  under certain condition, we need to turn off/on the esd
+ *  protector, we use kernel notify call chain to achieve this.
+ *
+ *  for example: before firmware update we need to turn off the
+ *  esd protector and after firmware update finished, we should
+ *  turn on the esd protector.
+ */
+static int goodix_esd_notifier_callback(struct notifier_block *nb,
+		unsigned long action, void *data)
+{
+	struct goodix_ts_esd *ts_esd = container_of(nb,
+			struct goodix_ts_esd, esd_notifier);
+
+	switch (action) {
+	case NOTIFY_FWUPDATE_START:
+	case NOTIFY_SUSPEND:
+	case NOTIFY_ESD_OFF:
+		goodix_ts_esd_off(ts_esd->ts_core);
+		break;
+	case NOTIFY_FWUPDATE_FAILED:
+	case NOTIFY_FWUPDATE_SUCCESS:
+	case NOTIFY_RESUME:
+	case NOTIFY_ESD_ON:
+		goodix_ts_esd_on(ts_esd->ts_core);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
 }
 
 /**
@@ -1650,7 +1715,10 @@ int goodix_ts_esd_init(struct goodix_ts_core *cd)
 	INIT_DELAYED_WORK(&ts_esd->esd_work, goodix_ts_esd_work);
 	ts_esd->ts_core = cd;
 	atomic_set(&ts_esd->esd_on, 0);
+	ts_esd->esd_notifier.notifier_call = goodix_esd_notifier_callback;
+	goodix_ts_register_notifier(&ts_esd->esd_notifier);
 	goodix_ts_esd_on(cd);
+	cd->esd_initialized = true;
 
 	return 0;
 }
@@ -1677,11 +1745,13 @@ static void goodix_ts_release_connects(struct goodix_ts_core *core_data)
 
 /**
  * goodix_ts_suspend - Touchscreen suspend function
- * Called by PM/FB/EARLYSUSPEN module to put the device to sleep
+ * Called by PM/FB/EARLYSUSPEN module to put the device to  sleep
  */
 static int goodix_ts_suspend(struct goodix_ts_core *core_data)
 {
+	struct goodix_ext_module *ext_module, *next;
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
+	int ret;
 
 	if (core_data->init_stage < CORE_INIT_STAGE2 ||
 			atomic_read(&core_data->suspended))
@@ -1691,21 +1761,56 @@ static int goodix_ts_suspend(struct goodix_ts_core *core_data)
 	atomic_set(&core_data->suspended, 1);
 	/* disable irq */
 	hw_ops->irq_enable(core_data, false);
-	goodix_ts_esd_off(core_data);
 
-	if (core_data->gesture_type) {
-		/* enter gesture mode */
-		hw_ops->gesture(core_data, 0);
-		hw_ops->irq_enable(core_data, true);
-		enable_irq_wake(core_data->irq);
-	} else {
-		/* enter sleep mode or power off */
-		if (core_data->board_data.sleep_enable)
-			hw_ops->suspend(core_data);
-		else
-			goodix_ts_power_off(core_data);
+	/*
+	 * notify suspend event, inform the esd protector
+	 * and charger detector to turn off the work
+	 */
+	goodix_ts_blocking_notify(NOTIFY_SUSPEND, NULL);
+
+	/* inform external module */
+	mutex_lock(&goodix_modules.mutex);
+	if (!list_empty(&goodix_modules.head)) {
+		list_for_each_entry_safe(ext_module, next,
+					 &goodix_modules.head, list) {
+			if (!ext_module->funcs->before_suspend)
+				continue;
+
+			ret = ext_module->funcs->before_suspend(core_data, ext_module);
+			if (ret == EVT_CANCEL_SUSPEND) {
+				mutex_unlock(&goodix_modules.mutex);
+				ts_info("Canceled by module:%s",
+					ext_module->name);
+				goto out;
+			}
+		}
 	}
+	mutex_unlock(&goodix_modules.mutex);
 
+	/* enter sleep mode or power off */
+	if (hw_ops->suspend)
+		hw_ops->suspend(core_data);
+
+	/* inform exteranl modules */
+	mutex_lock(&goodix_modules.mutex);
+	if (!list_empty(&goodix_modules.head)) {
+		list_for_each_entry_safe(ext_module, next,
+					&goodix_modules.head, list) {
+			if (!ext_module->funcs->after_suspend)
+				continue;
+
+			ret = ext_module->funcs->after_suspend(core_data, ext_module);
+			if (ret == EVT_CANCEL_SUSPEND) {
+				mutex_unlock(&goodix_modules.mutex);
+				ts_info("Canceled by module:%s",
+					ext_module->name);
+				goto out;
+			}
+		}
+	}
+	mutex_unlock(&goodix_modules.mutex);
+
+out:
 	goodix_ts_release_connects(core_data);
 	ts_info("Suspend end");
 	return 0;
@@ -1717,7 +1822,9 @@ static int goodix_ts_suspend(struct goodix_ts_core *core_data)
  */
 static int goodix_ts_resume(struct goodix_ts_core *core_data)
 {
+	struct goodix_ext_module *ext_module, *next;
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
+	int ret;
 
 	if (core_data->init_stage < CORE_INIT_STAGE2 ||
 			!atomic_read(&core_data->suspended))
@@ -1727,21 +1834,50 @@ static int goodix_ts_resume(struct goodix_ts_core *core_data)
 	atomic_set(&core_data->suspended, 0);
 	hw_ops->irq_enable(core_data, false);
 
-	if (core_data->gesture_type) {
-		disable_irq_wake(core_data->irq);
-		hw_ops->reset(core_data, GOODIX_NORMAL_RESET_DELAY_MS);
-	} else {
-		/* reset device or power on*/
-		if (core_data->board_data.sleep_enable)
-			hw_ops->resume(core_data);
-		else
-			goodix_ts_power_on(core_data);
-	}
+	mutex_lock(&goodix_modules.mutex);
+	if (!list_empty(&goodix_modules.head)) {
+		list_for_each_entry_safe(ext_module, next,
+					&goodix_modules.head, list) {
+			if (!ext_module->funcs->before_resume)
+				continue;
 
+			ret = ext_module->funcs->before_resume(core_data, ext_module);
+			if (ret == EVT_CANCEL_RESUME) {
+				mutex_unlock(&goodix_modules.mutex);
+				ts_info("Canceled by module:%s", ext_module->name);
+				goto out;
+			}
+		}
+	}
+	mutex_unlock(&goodix_modules.mutex);
+
+	/* reset device or power on*/
+	if (hw_ops->resume)
+		hw_ops->resume(core_data);
+
+	mutex_lock(&goodix_modules.mutex);
+	if (!list_empty(&goodix_modules.head)) {
+		list_for_each_entry_safe(ext_module, next,
+					&goodix_modules.head, list) {
+			if (!ext_module->funcs->after_resume)
+				continue;
+
+			ret = ext_module->funcs->after_resume(core_data, ext_module);
+			if (ret == EVT_CANCEL_RESUME) {
+				mutex_unlock(&goodix_modules.mutex);
+				ts_info("Canceled by module:%s",
+					ext_module->name);
+				goto out;
+			}
+		}
+	}
+	mutex_unlock(&goodix_modules.mutex);
+
+out:
 	/* enable irq */
 	hw_ops->irq_enable(core_data, true);
 	/* open esd */
-	goodix_ts_esd_on(core_data);
+	goodix_ts_blocking_notify(NOTIFY_RESUME, NULL);
 	ts_info("Resume end");
 	return 0;
 }
@@ -1847,9 +1983,48 @@ static int goodix_ts_pm_resume(struct device *dev)
 #endif
 #endif
 
-int goodix_ts_stage2_init(struct goodix_ts_core *cd)
+/**
+ * goodix_generic_noti_callback - generic notifier callback
+ *  for goodix touch notification event.
+ */
+static int goodix_generic_noti_callback(struct notifier_block *self,
+		unsigned long action, void *data)
+{
+	struct goodix_ts_core *cd = container_of(self,
+			struct goodix_ts_core, ts_notifier);
+	const struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
+
+	if (cd->init_stage < CORE_INIT_STAGE2)
+		return 0;
+
+	ts_info("notify event type 0x%x", (unsigned int)action);
+	switch (action) {
+	case NOTIFY_FWUPDATE_START:
+		hw_ops->irq_enable(cd, 0);
+		break;
+	case NOTIFY_FWUPDATE_SUCCESS:
+	case NOTIFY_FWUPDATE_FAILED:
+		if (hw_ops->read_version(cd, &cd->fw_version))
+			ts_info("failed read fw version info[ignore]");
+		hw_ops->irq_enable(cd, 1);
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+
+static int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 {
 	int ret;
+	struct goodix_bus_interface *bus_interface;
+	struct device_node *node;
+	bool is_primary;
+
+	bus_interface = cd->bus;
+	node = bus_interface->dev->of_node;
+	is_primary = (goodix_get_touch_type(node) == PRIMARY_TOUCH_IDX) ? 1 : 0;
+
 
 	/* alloc/config/register input device */
 	ret = goodix_ts_input_dev_config(cd);
@@ -1864,8 +2039,10 @@ int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 			ts_err("failed set pen device");
 			goto err_finger;
 		}
-		mutex_init(&cd->ble_data.lock);
 	}
+#ifdef CONFIG_ARCH_QTI_VM
+		goto skip_goodix_ts_irq_setup;
+#endif
 	/* request irq line */
 	ret = goodix_ts_irq_setup(cd);
 	if (ret < 0) {
@@ -1874,27 +2051,33 @@ int goodix_ts_stage2_init(struct goodix_ts_core *cd)
 	}
 	ts_info("success register irq");
 
-#if defined(CONFIG_FB)
+#if defined(CONFIG_DRM)
+	if (is_primary && cd->touch_environment && !strcmp(cd->touch_environment, "pvm"))
+		goodix_register_for_panel_events(cd->bus->dev->of_node, cd);
+
+#elif defined(CONFIG_FB)
 	cd->fb_notifier.notifier_call = goodix_ts_fb_notifier_callback;
 	if (fb_register_client(&cd->fb_notifier))
 		ts_err("Failed to register fb notifier client:%d", ret);
-#elif defined(CONFIG_DRM)
-	goodix_register_for_panel_events(cd->bus->dev->of_node, cd);
+#endif
+
+#ifdef CONFIG_ARCH_QTI_VM
+skip_goodix_ts_irq_setup:
 #endif
 	/* create sysfs files */
 	goodix_ts_sysfs_init(cd);
 
+	if (!is_primary)
+		return 0;
+
 	/* create procfs files */
 	goodix_ts_procfs_init(cd);
-
-	/* esd protector */
-	goodix_ts_esd_init(cd);
-
+#ifdef GOODIX_SUSPEND_GESTURE_ENABLE
 	/* gesture init */
-	gesture_module_init(cd);
-
+	gesture_module_init();
+#endif
 	/* inspect init */
-	inspect_module_init(cd);
+	inspect_module_init();
 
 	return 0;
 exit:
@@ -1909,9 +2092,6 @@ static int goodix_send_ic_config(struct goodix_ts_core *cd, int type)
 {
 	u32 config_id;
 	struct goodix_ic_config *cfg;
-
-	if (cd->board_data.use_one_binary)
-		return 0;
 
 	if (type >= GOODIX_MAX_CONFIG_GROUP) {
 		ts_err("unsupproted config type %d", type);
@@ -1948,49 +2128,63 @@ static int goodix_later_init_thread(void *data)
 	struct goodix_ts_core *cd = data;
 	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
 
+	mutex_lock(&goodix_later_init_tmutex);
+#ifdef CONFIG_ARCH_QTI_VM
+	goto skip_to_stage2_init;
+#endif
+
 	/* step 1: read version */
 	ret = cd->hw_ops->read_version(cd, &cd->fw_version);
 	if (ret < 0) {
 		ts_err("failed to get version info, try to upgrade");
 		update_flag |= UPDATE_MODE_FORCE;
+		goto upgrade;
 	}
 
-	/* step 2: read ic info */
-	ret = hw_ops->get_ic_info(cd, &cd->ic_info);
-	if (ret < 0) {
-		ts_err("failed to get ic info, try to upgrade");
-		update_flag |= UPDATE_MODE_FORCE;
-	}
-
-	/* step 3: get config data from config bin */
+	/* step 2: get config data from config bin */
 	ret = goodix_get_config_proc(cd);
-	if (ret < 0)
+	if (ret)
 		ts_info("no valid ic config found");
-	else if (ret == 0)
-		ts_info("success get valid ic config");
 	else
-		ts_info("one binary, no need find config");
+		ts_info("success get valid ic config");
 
-	/* step 4: init fw struct add try do fw upgrade */
+upgrade:
+	/* step 3: init fw struct add try do fw upgrade */
 	ret = goodix_fw_update_init(cd);
 	if (ret) {
 		ts_err("failed init fw update module");
 		goto err_out;
 	}
 
-	/* step 5: do upgrade */
 	ts_info("update flag: 0x%X", update_flag);
-	ret = goodix_do_fw_update(cd, update_flag);
+	ret = goodix_do_fw_update(cd->ic_configs[CONFIG_TYPE_NORMAL],
+			update_flag);
 	if (ret)
 		ts_err("failed do fw update");
 
-	print_ic_info(&cd->ic_info);
+	/* step 4: get fw version and ic_info
+	 * at this step we believe that the ic is in normal mode,
+	 * if the version info is invalid there must have some
+	 * problem we cann't cover so exit init directly.
+	 */
+	ret = hw_ops->read_version(cd, &cd->fw_version);
+	if (ret) {
+		ts_err("invalid fw version, abort");
+		goto uninit_fw;
+	}
+	ret = hw_ops->get_ic_info(cd, &cd->ic_info);
+	if (ret) {
+		ts_err("invalid ic info, abort");
+		goto uninit_fw;
+	}
 
 	/* the recomend way to update ic config is throuth ISP,
 	 * if not we will send config with interactive mode
 	 */
 	goodix_send_ic_config(cd, CONFIG_TYPE_NORMAL);
-
+#ifdef CONFIG_ARCH_QTI_VM
+skip_to_stage2_init:
+#endif
 	/* init other resources */
 	ret = goodix_ts_stage2_init(cd);
 	if (ret) {
@@ -1998,11 +2192,11 @@ static int goodix_later_init_thread(void *data)
 		goto uninit_fw;
 	}
 	cd->init_stage = CORE_INIT_STAGE2;
-
+	mutex_unlock(&goodix_later_init_tmutex);
 	return 0;
 
 uninit_fw:
-	goodix_fw_update_uninit(cd);
+	goodix_fw_update_uninit();
 err_out:
 	ts_err("stage2 init failed");
 	cd->init_stage = CORE_INIT_FAIL;
@@ -2010,6 +2204,7 @@ err_out:
 		kfree(cd->ic_configs[i]);
 		cd->ic_configs[i] = NULL;
 	}
+	mutex_unlock(&goodix_later_init_tmutex);
 	return ret;
 }
 
@@ -2021,7 +2216,7 @@ static int goodix_start_later_init(struct goodix_ts_core *ts_core)
 				ts_core, "goodix_init_thread");
 	if (IS_ERR_OR_NULL(init_thrd)) {
 		ts_err("Failed to create update thread:%ld",
-		       PTR_ERR(init_thrd));
+			PTR_ERR(init_thrd));
 		return -EFAULT;
 	}
 	return 0;
@@ -2099,16 +2294,169 @@ out:
 
 #endif
 
-/* goodix fb test */
-// static void test_suspend(void)
-// {
-// 	goodix_ts_suspend(goodix_modules.core_data);
-// }
+static int goodix_ts_suspend_helper(void *data)
+{
+	struct goodix_ts_core *core_data = data;
 
-// static void test_resume(void)
-// {
-// 	goodix_ts_resume(goodix_modules.core_data);
-// }
+	if (!core_data || !core_data->ready)
+		return 0;
+
+	return goodix_ts_suspend(core_data);
+}
+
+static int goodix_ts_resume_helper(void *data)
+{
+	struct goodix_ts_core *core_data = data;
+
+	if (!core_data || !core_data->ready)
+		return 0;
+
+	return goodix_ts_resume(core_data);
+}
+
+static int goodix_ts_enable_touch_irq(void *data, bool enable)
+{
+	struct goodix_ts_core *core_data = data;
+	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
+
+	hw_ops->irq_enable(core_data, enable);
+	return 0;
+}
+
+static int goodix_ts_pre_la_tui_enable(void *data)
+{
+	struct goodix_ts_core *core_data = data;
+	struct goodix_ts_esd *ts_esd = &core_data->ts_esd;
+
+	mutex_lock(&core_data->tui_transition_lock);
+	atomic_set(&ts_esd->esd_on, 0);
+
+	return 0;
+}
+
+static int goodix_ts_post_la_tui_enable(void *data)
+{
+	struct goodix_ts_core *core_data = data;
+
+	goodix_ts_release_connects(core_data);
+	mutex_unlock(&core_data->tui_transition_lock);
+	return 0;
+}
+
+static int goodix_ts_post_la_tui_disable(void *data)
+{
+	struct goodix_ts_core *core_data = data;
+	struct goodix_ts_esd *ts_esd = &core_data->ts_esd;
+
+	atomic_set(&ts_esd->esd_on, 1);
+	return 0;
+}
+
+static int goodix_ts_post_le_tui_enable(void *data)
+{
+	int ret;
+	struct goodix_ts_core *cd = data;
+	struct goodix_ts_hw_ops *hw_ops = cd->hw_ops;
+
+	ret = hw_ops->read_version(cd, &cd->fw_version);
+	if (ret) {
+		ts_err("invalid fw version, abort");
+		return -EINVAL;
+	}
+	ret = hw_ops->get_ic_info(cd, &cd->ic_info);
+	if (ret) {
+		ts_err("invalid ic info, abort");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int goodix_ts_post_le_tui_disable(void *data)
+{
+	struct goodix_ts_core *core_data = data;
+
+	goodix_ts_release_connects(core_data);
+	return 0;
+}
+
+static int goodix_ts_get_irq_num(void *data)
+{
+	struct goodix_ts_core *core_data = data;
+
+	return core_data->irq;
+}
+
+static irqreturn_t  goodix_irq_handler(int irq, void *data)
+{
+	struct goodix_ts_core *core_data = data;
+
+	if (!mutex_trylock(&core_data->tui_transition_lock))
+		return IRQ_HANDLED;
+
+	goodix_ts_threadirq_func(irq, data);
+	mutex_unlock(&core_data->tui_transition_lock);
+
+	return IRQ_HANDLED;
+}
+
+static void goodix_ts_fill_qts_vendor_data(struct qts_vendor_data *qts_vendor_data,
+		 struct goodix_ts_core *core_data)
+{
+	struct goodix_bus_interface *bus_interface;
+	struct device_node *node;
+	const char *touch_type;
+	int rc = 0;
+
+	bus_interface = core_data->bus;
+	node = bus_interface->dev->of_node;
+
+	rc = of_property_read_string(node, "goodix,touch-type", &touch_type);
+	if (rc) {
+		ts_err("No touch type\n");
+		return;
+	}
+
+	if (!strcmp(touch_type, "primary"))
+		qts_vendor_data->client_type = QTS_CLIENT_PRIMARY_TOUCH;
+	else
+		qts_vendor_data->client_type = QTS_CLIENT_SECONDARY_TOUCH;
+
+	switch (bus_interface->bus_type) {
+	case GOODIX_BUS_TYPE_I2C:
+		qts_vendor_data->client = to_i2c_client(bus_interface->dev);
+		qts_vendor_data->spi = NULL;
+		qts_vendor_data->bus_type = QTS_BUS_TYPE_I2C;
+		break;
+
+	case GOODIX_BUS_TYPE_SPI:
+		qts_vendor_data->client = NULL;
+		qts_vendor_data->spi = to_spi_device(bus_interface->dev);
+		qts_vendor_data->bus_type = QTS_BUS_TYPE_SPI;
+		break;
+
+	default:
+		ts_err("Invalid bus type :%d\n",
+				bus_interface->bus_type);
+		break;
+	}
+
+	qts_vendor_data->vendor_data = core_data;
+	qts_vendor_data->schedule_suspend = false;
+	qts_vendor_data->schedule_resume = false;
+	qts_vendor_data->qts_vendor_ops.suspend = goodix_ts_suspend_helper;
+	qts_vendor_data->qts_vendor_ops.resume = goodix_ts_resume_helper;
+	qts_vendor_data->qts_vendor_ops.enable_touch_irq = goodix_ts_enable_touch_irq;
+	qts_vendor_data->qts_vendor_ops.get_irq_num = goodix_ts_get_irq_num;
+	qts_vendor_data->qts_vendor_ops.pre_la_tui_enable = goodix_ts_pre_la_tui_enable;
+	qts_vendor_data->qts_vendor_ops.post_la_tui_enable = goodix_ts_post_la_tui_enable;
+	qts_vendor_data->qts_vendor_ops.pre_la_tui_disable = NULL;
+	qts_vendor_data->qts_vendor_ops.post_la_tui_disable = goodix_ts_post_la_tui_disable;
+	qts_vendor_data->qts_vendor_ops.pre_le_tui_enable = NULL;
+	qts_vendor_data->qts_vendor_ops.post_le_tui_enable = goodix_ts_post_le_tui_enable;
+	qts_vendor_data->qts_vendor_ops.pre_le_tui_disable = NULL;
+	qts_vendor_data->qts_vendor_ops.post_le_tui_disable = goodix_ts_post_le_tui_disable;
+	qts_vendor_data->qts_vendor_ops.irq_handler = goodix_irq_handler;
+}
 
 /**
  * goodix_ts_probe - called by kernel when Goodix touch
@@ -2116,23 +2464,35 @@ out:
  */
 static int goodix_ts_probe(struct platform_device *pdev)
 {
-	struct goodix_device_resource *dev_res =
-			container_of(pdev, struct goodix_device_resource, pdev);
-	struct goodix_ts_core *core_data;
+	struct goodix_ts_core *core_data = NULL;
 	struct goodix_bus_interface *bus_interface;
 	int ret;
+	struct device_node *node;
+	bool qts_en = false;
+	struct qts_vendor_data qts_vendor_data;
+	bool is_primary;
 
-	ts_info("IN");
+	ts_info("goodix_ts_probe IN");
 
-	core_data = &dev_res->core_data;
-	bus_interface = &dev_res->bus;
+	if (!core_module_prob_sate)
+		mutex_init(&goodix_later_init_tmutex);
+
+	bus_interface = pdev->dev.platform_data;
+	if (!bus_interface) {
+		ts_err("Invalid touch device");
+		core_module_prob_sate = CORE_MODULE_PROB_FAILED;
+		return -ENODEV;
+	}
+	node = bus_interface->dev->of_node;
+	is_primary = (goodix_get_touch_type(node) == PRIMARY_TOUCH_IDX) ? 1 : 0;
+
 #if defined(CONFIG_DRM)
-	ret = goodix_check_dt(bus_interface->dev->of_node);
+	ret = goodix_check_dt(node);
 	if (ret == -EPROBE_DEFER)
 		return ret;
 
 	if (ret) {
-		if (!goodix_check_default_tp(bus_interface->dev->of_node, "qcom,touch-active"))
+		if (!goodix_check_default_tp(node, "qcom,touch-active"))
 			ret = -EPROBE_DEFER;
 		else
 			ret = -ENODEV;
@@ -2141,32 +2501,50 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	}
 #endif
 
+	core_data = devm_kzalloc(&pdev->dev,
+			sizeof(struct goodix_ts_core), GFP_KERNEL);
+	if (!core_data) {
+		core_module_prob_sate = CORE_MODULE_PROB_FAILED;
+		return -ENOMEM;
+	}
+
+	core_data->bus = bus_interface;
+
 	if (IS_ENABLED(CONFIG_OF) && bus_interface->dev->of_node) {
 		/* parse devicetree property */
-		ret = goodix_parse_dt(bus_interface->dev->of_node,
-					&core_data->board_data);
+		ret = goodix_parse_dt(node, &core_data->board_data);
 		if (ret) {
 			ts_err("failed parse device info form dts, %d", ret);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto err_out;
 		}
+#if defined(CONFIG_DRM)
+		of_property_read_string(node, "qcom,touch-environment",
+				&core_data->touch_environment);
+#endif
 	} else {
 		ts_err("no valid device tree node found");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_out;
 	}
 
 	core_data->hw_ops = goodix_get_hw_ops();
 	if (!core_data->hw_ops) {
 		ts_err("hw ops is NULL");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto err_out;
 	}
-	mutex_init(&core_data->cmd_lock);
 
+	if (is_primary)
+		goodix_core_module_init();
 	/* touch core layer is a platform driver */
 	core_data->pdev = pdev;
-	core_data->bus = bus_interface;
 	platform_set_drvdata(pdev, core_data);
 
 	/* get GPIO resource */
+#ifdef CONFIG_ARCH_QTI_VM
+	goto skip_to_power_gpio_setup;
+#endif
 	ret = goodix_ts_gpio_setup(core_data);
 	if (ret) {
 		ts_err("failed init gpio");
@@ -2185,13 +2563,35 @@ static int goodix_ts_probe(struct platform_device *pdev)
 		goto err_out;
 	}
 
-	/* debug node init */
-	goodix_tools_init(core_data);
+#ifdef CONFIG_ARCH_QTI_VM
+skip_to_power_gpio_setup:
+#endif
 
-	/* goodix fb test */
-	// fb_firefly_register(test_suspend, test_resume);
+	qts_en = of_property_read_bool(node, "goodix,qts_en");
+	if (qts_en) {
+		mutex_init(&core_data->tui_transition_lock);
+		goodix_ts_fill_qts_vendor_data(&qts_vendor_data, core_data);
+
+		ret = qts_client_register(&qts_vendor_data);
+		if (ret) {
+			pr_err("qts client register failed, rc %d\n", ret);
+			goto err_out;
+		}
+		core_data->qts_en = qts_en;
+	}
+
+	/* generic notifier callback */
+	core_data->ts_notifier.notifier_call = goodix_generic_noti_callback;
+	goodix_ts_register_notifier(&core_data->ts_notifier);
+
+	/* debug node init */
+	if (is_primary)
+		goodix_tools_init();
 
 	core_data->init_stage = CORE_INIT_STAGE1;
+	goodix_modules.core_data = core_data;
+	core_module_prob_sate = CORE_MODULE_PROB_SUCCESS;
+	core_data->ready = true;
 
 	/* Try start a thread to get config-bin info */
 	goodix_start_later_init(core_data);
@@ -2200,23 +2600,30 @@ static int goodix_ts_probe(struct platform_device *pdev)
 	return 0;
 
 err_out:
-	mutex_destroy(&core_data->cmd_lock);
-	core_data->init_stage = CORE_INIT_FAIL;
+	devm_kfree(&pdev->dev, core_data);
+	core_module_prob_sate = CORE_MODULE_PROB_FAILED;
 	ts_err("goodix_ts_core failed, ret:%d", ret);
 	return ret;
 }
 
+#if (KERNEL_VERSION(6, 10, 0) <= LINUX_VERSION_CODE)
+static void goodix_ts_remove(struct platform_device *pdev)
+#else
 static int goodix_ts_remove(struct platform_device *pdev)
+#endif
 {
 	struct goodix_ts_core *core_data = platform_get_drvdata(pdev);
 	struct goodix_ts_hw_ops *hw_ops = core_data->hw_ops;
 	struct goodix_ts_esd *ts_esd = &core_data->ts_esd;
 
-	goodix_tools_exit(core_data);
+	goodix_ts_unregister_notifier(&core_data->ts_notifier);
+	goodix_tools_exit();
 
 	if (core_data->init_stage >= CORE_INIT_STAGE2) {
-		gesture_module_exit(core_data);
-		inspect_module_exit(core_data);
+	#ifdef GOODIX_SUSPEND_GESTURE_ENABLE
+		gesture_module_exit();
+	#endif
+		inspect_module_exit();
 		hw_ops->irq_enable(core_data, false);
 
 	#if defined(CONFIG_DRM)
@@ -2225,11 +2632,12 @@ static int goodix_ts_remove(struct platform_device *pdev)
 	#elif IS_ENABLED(CONFIG_FB)
 		fb_unregister_client(&core_data->fb_notifier);
 	#endif
-
-		if (atomic_read(&ts_esd->esd_on))
+		core_module_prob_sate = CORE_MODULE_REMOVED;
+		if (atomic_read(&core_data->ts_esd.esd_on))
 			goodix_ts_esd_off(core_data);
+		goodix_ts_unregister_notifier(&ts_esd->esd_notifier);
 
-		goodix_fw_update_uninit(core_data);
+		goodix_fw_update_uninit();
 		goodix_ts_input_dev_remove(core_data);
 		goodix_ts_pen_dev_remove(core_data);
 		goodix_ts_sysfs_exit(core_data);
@@ -2237,7 +2645,9 @@ static int goodix_ts_remove(struct platform_device *pdev)
 		goodix_ts_power_off(core_data);
 	}
 
+#if (KERNEL_VERSION(6, 10, 0) > LINUX_VERSION_CODE)
 	return 0;
+#endif
 }
 
 #if defined(CONFIG_PM) && !defined(CONFIG_DRM)
@@ -2250,7 +2660,8 @@ static const struct dev_pm_ops dev_pm_ops = {
 #endif
 
 static const struct platform_device_id ts_core_ids[] = {
-	{.name = GOODIX_CORE_DRIVER_NAME},
+	{.name = GOODIX_CORE_DEVICE_NAME},
+	{.name = GOODIX_CORE_DEVICE_2_NAME},
 	{}
 };
 MODULE_DEVICE_TABLE(platform, ts_core_ids);
@@ -2270,26 +2681,16 @@ static struct platform_driver goodix_ts_driver = {
 
 static int __init goodix_ts_core_init(void)
 {
-	int ret;
+	int ret = 0;
 
 	ts_info("Core layer init:%s", GOODIX_DRIVER_VERSION);
-	goodix_device_manager_init();
 
-//#ifdef CONFIG_TOUCHSCREEN_GOODIX_BRL_SPI
 	ret = goodix_spi_bus_init();
+	ret |= goodix_i2c_bus_init();
 	if (ret) {
-		ts_err("failed add spi bus driver");
+		ts_err("failed add bus driver");
 		return ret;
 	}
-//#endif
-//#ifdef CONFIG_TOUCHSCREEN_GOODIX_BRL_I2C
-//	ret = goodix_i2c_bus_init();
-//	if (ret) {
-//		ts_err("failed add i2c bus driver");
-//		return ret;
-//	}
-//#endif
-
 	return platform_driver_register(&goodix_ts_driver);
 }
 
@@ -2297,16 +2698,17 @@ static void __exit goodix_ts_core_exit(void)
 {
 	ts_info("Core layer exit");
 	platform_driver_unregister(&goodix_ts_driver);
-//#ifdef CONFIG_TOUCHSCREEN_GOODIX_BRL_SPI
+
 	goodix_spi_bus_exit();
-//#endif
-//#ifdef CONFIG_TOUCHSCREEN_GOODIX_BRL_I2C
-//	goodix_i2c_bus_exit();
-//#endif
-	goodix_device_manager_exit();
+
+	goodix_i2c_bus_exit();
 }
 
+#ifdef CONFIG_ARCH_QTI_VM
+module_init(goodix_ts_core_init);
+#else
 late_initcall(goodix_ts_core_init);
+#endif
 module_exit(goodix_ts_core_exit);
 
 MODULE_DESCRIPTION("Goodix Touchscreen Core Module");

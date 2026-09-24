@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -540,15 +540,6 @@ QDF_STATUS sme_mc_process_handler(struct scheduler_msg *msg);
 QDF_STATUS sme_roam_ndi_stop(mac_handle_t mac_handle, uint8_t vdev_id);
 
 void sme_dhcp_done_ind(mac_handle_t mac_handle, uint8_t session_id);
-
-/**
- * sme_get_dhcp_status() - API to check if dhcp is in progress
- * @mac_handle: Opaque handle to the global MAC context
- * @session_id: session id
- *
- * Return: True if dhcp in progress, else False
- */
-bool sme_get_dhcp_status(mac_handle_t mac_handle, uint8_t session_id);
 
 /*
  * sme_roam_stop_bss() - To stop BSS for Soft AP. This is an asynchronous API.

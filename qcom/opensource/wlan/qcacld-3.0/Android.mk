@@ -35,13 +35,6 @@ LOCAL_MODULE_DDK_BUILD := true
 LOCAL_MODULE_DDK_ALLOW_UNSAFE_HEADERS := true
 endif
 
-ifeq ($(TARGET_BOARD_PLATFORM),parrot)
-ifeq ($(TARGET_BOARD_SUFFIX),66)
-LOCAL_MODULE_DDK_BUILD := true
-LOCAL_MODULE_DDK_ALLOW_UNSAFE_HEADERS := true
-endif
-endif
-
 LOCAL_PATH := $(call my-dir)
 $(call wlog,LOCAL_PATH=$(LOCAL_PATH))
 BOARD_OPENSOURCE_DIR ?= vendor/qcom/opensource
@@ -180,6 +173,11 @@ endif
 ifneq ($(WLAN_PLATFORM_KBUILD_OPTIONS),)
 LOCAL_REQUIRED_MODULES := wlan-platform-module-symvers
 LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,wlan-platform-module-symvers)/Module.symvers
+
+ifeq ($(MI_SUPPORT_OSRTP), true)
+LOCAL_REQUIRED_MODULES += mixdp-module-symvers
+LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,mixdp-module-symvers)/Module.symvers
+endif
 endif
 
 $(call wlog,TARGET_USES_KERNEL_PLATFORM=$(TARGET_USES_KERNEL_PLATFORM))
@@ -243,6 +241,9 @@ DYNAMIC_SINGLE_CHIP := $(LOCAL_CHIP_NAME)
 endif
 
 endif
+
+#always use same target path and only write in factory
+TARGET_MAC_BIN_PATH := /mnt/vendor/persist/wlan
 
 # DLKM_DIR was moved for JELLY_BEAN (PLATFORM_SDK 16)
 ifeq ($(call is-platform-sdk-version-at-least,16),true)
@@ -321,7 +322,13 @@ KBUILD_OPTIONS += $(foreach wlan_platform_kbuild_option, \
 		   $(WLAN_PLATFORM_KBUILD_OPTIONS), \
 		   $(wlan_platform_kbuild_option))
 
-KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(shell pwd)/$(call intermediates-dir-for,DLKM,wlan-platform-module-symvers)/Module.symvers
+WLAN_EXTRA_SYMBOLS := $(shell pwd)/$(call intermediates-dir-for,DLKM,wlan-platform-module-symvers)/Module.symvers
+
+ifeq ($(MI_SUPPORT_OSRTP), true)
+WLAN_EXTRA_SYMBOLS += $(shell pwd)/$(call intermediates-dir-for,DLKM,mixdp-module-symvers)/Module.symvers
+endif
+
+KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(WLAN_EXTRA_SYMBOLS)
 endif
 
 include $(CLEAR_VARS)
@@ -374,6 +381,11 @@ endif
 ifneq ($(WLAN_PLATFORM_KBUILD_OPTIONS),)
 LOCAL_REQUIRED_MODULES := wlan-platform-module-symvers
 LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,wlan-platform-module-symvers)/Module.symvers
+
+ifeq ($(MI_SUPPORT_OSRTP), true)
+LOCAL_REQUIRED_MODULES += mixdp-module-symvers
+LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,mixdp-module-symvers)/Module.symvers
+endif
 endif
 
 $(call wlog,TARGET_USES_KERNEL_PLATFORM=$(TARGET_USES_KERNEL_PLATFORM))

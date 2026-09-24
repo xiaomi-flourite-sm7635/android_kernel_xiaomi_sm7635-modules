@@ -17,12 +17,13 @@ endif
 
 #MSM - Vendor SI
 ifeq ($(filter $(CONFIG_ARCH_WAIPIO) $(CONFIG_ARCH_KALAMA) $(CONFIG_ARCH_PINEAPPLE) $(CONFIG_ARCH_CLIFFS) $(CONFIG_ARCH_PITTI) $(CONFIG_ARCH_VOLCANO), y),y)
-DATAIPADRVTOP = $(srctree)/../sm7635-modules/qcom/opensource/dataipa/drivers/platform/msm
-LINUXINCLUDE    += -include $(srctree)/../sm7635-modules/qcom/opensource/dataipa/config/dataipa_vendor.h
-include $(srctree)/../sm7635-modules/qcom/opensource/dataipa/config/dataipa_GKI.conf
+DATAIPADRVTOP = $(src)
+DATAIPA_ROOT = $(src)/../../..
+LINUXINCLUDE    += -include $(DATAIPA_ROOT)/config/dataipa_vendor.h
+include $(DATAIPA_ROOT)/config/dataipa_GKI.conf
 ifeq ($(CONFIG_LOCALVERSION), "-gki-consolidate")
-include $(srctree)/../sm7635-modules/qcom/opensource/dataipa/config/dataipa_GKI_consolidate.conf
-LINUXINCLUDE    += -include $(srctree)/../sm7635-modules/qcom/opensource/dataipa/config/dataipa_debug.h
+include $(DATAIPA_ROOT)/config/dataipa_GKI_consolidate.conf
+LINUXINCLUDE    += -include $(DATAIPA_ROOT)/config/dataipa_debug.h
 endif
 endif
 

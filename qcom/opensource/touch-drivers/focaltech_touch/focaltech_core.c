@@ -3,7 +3,7 @@
  * FocalTech TouchScreen driver.
  *
  * Copyright (c) 2012-2019, FocalTech Systems, Ltd., all rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -53,6 +53,8 @@
 #define FTS_SUSPEND_LEVEL 1     /* Early-suspend level */
 #endif
 #include "focaltech_core.h"
+
+#include "../qts/qts_core_common.h"
 
 #if defined(CONFIG_FTS_TRUSTED_TOUCH)
 #include <linux/atomic.h>
@@ -112,16 +114,8 @@ static int fts_ts_probe_delayed(struct fts_ts_data *fts_data);
 #ifndef CONFIG_ARCH_QTI_VM
 static int fts_ts_enable_reg(struct fts_ts_data *ts_data, bool enable);
 #endif
-static int fts_ts_suspend_helper(void *data);
-static int fts_ts_resume_helper(void *data);
-static int fts_ts_enable_touch_irq(void *data, bool enable);
-static int fts_ts_get_irq_num(void *data);
-static int fts_ts_pre_la_tui_enable(void *data);
-static int fts_ts_post_la_tui_enable(void *data);
-static int fts_ts_post_le_tui_enable(void *data);
-static int fts_ts_post_le_tui_disable(void *data);
 static void fts_ts_fill_qts_vendor_data(struct qts_vendor_data *qts_vendor_data,
-		 struct fts_ts_data *core_data);
+		 struct fts_ts_data *ts_data);
 static irqreturn_t fts_ts_irq_handler(int irq, void *data);
 
 static void fts_ts_register_for_panel_events(struct device_node *dp,
@@ -1449,7 +1443,6 @@ void fts_hid2std(void)
 		FTS_DEBUG("hidi2c change to stdi2c successful");
 	else
 		FTS_DEBUG("hidi2c change to stdi2c not support or fail");
-
 }
 
 static int fts_get_chip_types(
@@ -2787,9 +2780,10 @@ err_gpio_config:
 static int fts_ts_probe_entry(struct fts_ts_data *ts_data)
 {
 	int ret = 0;
+	struct device_node *dp = ts_data->dev->of_node;
 	int pdata_size = sizeof(struct fts_ts_platform_data);
-	bool qts_en = false;
 	struct qts_vendor_data qts_vendor_data;
+	bool qts_en = false;
 
 	FTS_FUNC_ENTER();
 	FTS_INFO("%s", FTS_DRIVER_VERSION);
@@ -2900,12 +2894,11 @@ static int fts_ts_probe_entry(struct fts_ts_data *ts_data)
 		goto err_probe_delayed;
 	}
 #endif
-	qts_en = of_property_read_bool(ts_data->dev->of_node, "focaltech,qts_en");
+	qts_en = of_property_read_bool(dp, "focaltech,qts_en");
 	if (qts_en) {
 		mutex_init(&ts_data->tui_transition_lock);
 		fts_ts_fill_qts_vendor_data(&qts_vendor_data, ts_data);
-
-		ret = qts_client_register(qts_vendor_data);
+		ret = qts_client_register(&qts_vendor_data);
 		if (ret) {
 			pr_err("qts client register failed, rc %d\n", ret);
 			goto err_probe_delayed;
@@ -3226,18 +3219,13 @@ static int fts_ts_suspend_helper(void *data)
 {
 	struct fts_ts_data *ts_data = data;
 
-	if (!ts_data)
-		return 0;
-
 	return fts_ts_suspend(ts_data->dev);
 }
+
 
 static int fts_ts_resume_helper(void *data)
 {
 	struct fts_ts_data *ts_data = data;
-
-	if (!ts_data)
-		return 0;
 
 	return fts_ts_resume(ts_data->dev);
 }
@@ -3271,12 +3259,15 @@ static int fts_ts_post_la_tui_enable(void *data)
 
 static int fts_ts_post_le_tui_enable(void *data)
 {
+
 	return 0;
 }
 
 static int fts_ts_post_le_tui_disable(void *data)
 {
+
 	fts_release_all_finger();
+
 	return 0;
 }
 
@@ -3311,13 +3302,13 @@ static irqreturn_t fts_ts_irq_handler(int irq, void *data)
 }
 
 static void fts_ts_fill_qts_vendor_data(struct qts_vendor_data *qts_vendor_data,
-		 struct fts_ts_data *core_data)
+		 struct fts_ts_data *ts_data)
 {
 	struct device_node *node;
 	const char *touch_type;
 	int rc = 0;
 
-	node = core_data->dev->of_node;
+	node = ts_data->dev->of_node;
 
 	rc = of_property_read_string(node, "focaltech,touch-type", &touch_type);
 	if (rc) {
@@ -3330,26 +3321,13 @@ static void fts_ts_fill_qts_vendor_data(struct qts_vendor_data *qts_vendor_data,
 	else
 		qts_vendor_data->client_type = QTS_CLIENT_SECONDARY_TOUCH;
 
-	switch (core_data->bus_type) {
-	case BUS_TYPE_I2C:
-		qts_vendor_data->client = core_data->client;
+	if (ts_data->bus_type == BUS_TYPE_I2C) {
+		qts_vendor_data->client = ts_data->client;
 		qts_vendor_data->spi = NULL;
 		qts_vendor_data->bus_type = QTS_BUS_TYPE_I2C;
-		break;
-
-	case BUS_TYPE_SPI_V2:
-		qts_vendor_data->client = NULL;
-		qts_vendor_data->spi = to_spi_device(core_data->dev);
-		qts_vendor_data->bus_type = QTS_BUS_TYPE_SPI;
-		break;
-
-	default:
-		FTS_ERROR("Invalid bus type :%d\n",
-				core_data->bus_type);
-		break;
 	}
 
-	qts_vendor_data->vendor_data = core_data;
+	qts_vendor_data->vendor_data = ts_data;
 	qts_vendor_data->schedule_suspend = false;
 	qts_vendor_data->schedule_resume = true;
 	qts_vendor_data->qts_vendor_ops.suspend = fts_ts_suspend_helper;
@@ -3368,7 +3346,7 @@ static void fts_ts_fill_qts_vendor_data(struct qts_vendor_data *qts_vendor_data,
 	qts_vendor_data->qts_vendor_ops.irq_handler = fts_ts_irq_handler;
 }
 
-static int fts_ts_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int fts_ts_i2c_probe(struct i2c_client *client)
 {
 	int ret = 0;
 	struct fts_ts_data *ts_data = NULL;
@@ -3584,8 +3562,6 @@ static void __exit fts_ts_spi_exit(void)
 static int __init fts_ts_init(void)
 {
 	int ret = 0;
-
-	pr_err("fts_ts_init module init\n");
 
 	ret = fts_ts_i2c_init();
 	if (ret)

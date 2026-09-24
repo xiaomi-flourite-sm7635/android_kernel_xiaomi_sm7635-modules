@@ -8,12 +8,12 @@ LOCAL_MODULE_DDK_BUILD := true
 endif
 include $(CLEAR_VARS)
 
+ifeq (true, $(strip $(is-factory-build)))
+	DISPLAY_FACTORY_BUILD := CONFIG_DISPLAY_FACTORY_BUILD=1
+endif
 LOCAL_MODULE_DDK_SUBTARGET_REGEX := "display_drivers*"
 ifeq ($(TARGET_BOARD_PLATFORM), volcano)
   LOCAL_MODULE_DDK_SUBTARGET_REGEX := "$(TARGET_BOARD_PLATFORM)_display_drivers.*"
-endif
-ifneq ($(filter $(TARGET_BASE_PRODUCT),$(T2M_CUSTO_PRODUCTS)),)
-  LOCAL_MODULE_DDK_SUBTARGET_REGEX := "display_drivers*"
 endif
 
 # This makefile is only for DLKM
@@ -34,21 +34,30 @@ KBUILD_OPTIONS := DISPLAY_ROOT=$(DISPLAY_BLD_DIR)
 KBUILD_OPTIONS += MODNAME=msm_drm
 KBUILD_OPTIONS += BOARD_PLATFORM=$(TARGET_BOARD_PLATFORM)
 KBUILD_OPTIONS += $(DISPLAY_SELECT)
-KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(OUT_DIR)/obj/DLKM_OBJ/kernel_platform/msm-kernel/Module.symvers
+KBUILD_OPTIONS += $(DISPLAY_FACTORY_BUILD)
 
 ifneq ($(TARGET_BOARD_AUTO),true)
 ifneq ($(TARGET_BOARD_PLATFORM), pitti)
 KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(PWD)/$(call intermediates-dir-for,DLKM,mmrm-module-symvers)/Module.symvers
 endif
 ifneq ($(TARGET_BOARD_PLATFORM), taro)
-ifneq ($(TARGET_BOARD_PLATFORM), neo61)
 	KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(PWD)/$(call intermediates-dir-for,DLKM,sync-fence-module-symvers)/Module.symvers
+	KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(PWD)/$(call intermediates-dir-for,DLKM,msm-ext-disp-module-symvers)/Module.symvers
 	KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(PWD)/$(call intermediates-dir-for,DLKM,hw-fence-module-symvers)/Module.symvers
 	KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(PWD)/$(call intermediates-dir-for,DLKM,sec-module-symvers)/Module.symvers
 endif
-	KBUILD_OPTIONS += KBUILD_EXTRA_SYMBOLS+=$(PWD)/$(call intermediates-dir-for,DLKM,msm-ext-disp-module-symvers)/Module.symvers
 endif
-endif
+
+include $(CLEAR_VARS)
+# For incremental compilation
+LOCAL_SRC_FILES           := $(wildcard $(LOCAL_PATH)/**/*) $(wildcard $(LOCAL_PATH)/*)
+LOCAL_MODULE              := msm_drm-module-symvers
+LOCAL_MODULE_STEM         := Module.symvers
+LOCAL_MODULE_KBUILD_NAME  := Module.symvers
+LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
+# Include kp_module.ko in the /vendor/lib/modules (vendor.img)
+# BOARD_VENDOR_KERNEL_MODULES += $(LOCAL_MODULE_PATH)/$(LOCAL_MODULE)
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
 
 ###########################################################
 include $(CLEAR_VARS)
@@ -65,16 +74,14 @@ LOCAL_REQUIRED_MODULES    += mmrm-module-symvers
 LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,mmrm-module-symvers)/Module.symvers
 endif
 ifneq ($(TARGET_BOARD_PLATFORM), taro)
-ifneq ($(TARGET_BOARD_PLATFORM), neo61)
 	LOCAL_REQUIRED_MODULES    += sync-fence-module-symvers
+	LOCAL_REQUIRED_MODULES    += msm-ext-disp-module-symvers
 	LOCAL_REQUIRED_MODULES    += hw-fence-module-symvers
 	LOCAL_REQUIRED_MODULES    += sec-module-symvers
 	LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,sync-fence-module-symvers)/Module.symvers
+	LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,msm-ext-disp-module-symvers)/Module.symvers
 	LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,hw-fence-module-symvers)/Module.symvers
 	LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,sec-module-symvers)/Module.symvers
-endif
-	LOCAL_REQUIRED_MODULES    += msm-ext-disp-module-symvers
-	LOCAL_ADDITIONAL_DEPENDENCIES += $(call intermediates-dir-for,DLKM,msm-ext-disp-module-symvers)/Module.symvers
 endif
 endif
 

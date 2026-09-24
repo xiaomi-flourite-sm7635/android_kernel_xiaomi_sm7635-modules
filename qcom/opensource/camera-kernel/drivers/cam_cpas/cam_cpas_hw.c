@@ -4732,14 +4732,8 @@ int cam_cpas_hw_probe(struct platform_device *pdev,
 
 	rc = cam_cpas_create_sysfs(cpas_hw);
 	if (rc) {
-		//Begin add by binchang.liang to create again when failed FPS-2969
-		CAM_ERR(CAM_CPAS, "[fair]again to create sysfs entries, rc: %d", rc);
-		rc = cam_cpas_create_sysfs(cpas_hw);
-		if (rc) {
-			CAM_ERR(CAM_CPAS, "Failed to create sysfs entries, rc: %d", rc);
-			goto sysfs_fail;
-		}
-		//End add by binchang.liang to create again when failed FPS-2969
+		CAM_ERR(CAM_CPAS, "Failed to create sysfs entries, rc: %d", rc);
+		goto sysfs_fail;
 	}
 
 	cpas_core->num_clients = soc_private->num_clients;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -48,6 +48,10 @@
 #include "sde_trace.h"
 #include "msm_drv.h"
 #include "sde_vm.h"
+
+#ifdef MI_DISPLAY_MODIFY
+#include "mi_sde_crtc.h"
+#endif
 
 #define SDE_PSTATES_MAX (SDE_STAGE_MAX * 4)
 #define SDE_MULTIRECT_PLANE_MAX (SDE_STAGE_MAX * 2)
@@ -976,7 +980,6 @@ static int _sde_crtc_set_roi_v1(struct drm_crtc_state *state,
 				roi_v1.num_rects);
 		return -EINVAL;
 	}
-
 	cstate->user_roi_list.roi_feature_flags = roi_v1.roi_feature_flags;
 	cstate->user_roi_list.num_rects = roi_v1.num_rects;
 	for (i = 0; i < roi_v1.num_rects; ++i) {
@@ -1000,6 +1003,17 @@ static int _sde_crtc_set_roi_v1(struct drm_crtc_state *state,
 				cstate->user_roi_list.roi[i].y1,
 				cstate->user_roi_list.roi[i].x2,
 				cstate->user_roi_list.roi[i].y2);
+		SDE_DEBUG("crtc%d: spr roi%d: spr roi (%d,%d) (%d,%d)\n",
+				DRMID(crtc), i,
+				cstate->user_roi_list.spr_roi[i].x1,
+				cstate->user_roi_list.spr_roi[i].y1,
+				cstate->user_roi_list.spr_roi[i].x2,
+				cstate->user_roi_list.spr_roi[i].y2);
+		SDE_EVT32_VERBOSE(DRMID(crtc),
+				cstate->user_roi_list.spr_roi[i].x1,
+				cstate->user_roi_list.spr_roi[i].y1,
+				cstate->user_roi_list.spr_roi[i].x2,
+				cstate->user_roi_list.spr_roi[i].y2);
 		SDE_DEBUG("crtc%d, roi_feature_flags %d: spr roi%d: spr roi (%d,%d) (%d,%d)\n",
 				DRMID(crtc), roi_v1.roi_feature_flags, i,
 				roi_v1.spr_roi[i].x1,
@@ -2977,16 +2991,14 @@ enum sde_intf_mode sde_crtc_get_intf_mode(struct drm_crtc *crtc,
 		struct drm_crtc_state *cstate)
 {
 	struct drm_encoder *encoder;
-	struct sde_crtc *sde_crtc;
 
 	if (!crtc || !crtc->dev || !cstate) {
 		SDE_ERROR("invalid crtc\n");
 		return INTF_MODE_NONE;
 	}
 
-	sde_crtc = to_sde_crtc(crtc);
 	drm_for_each_encoder_mask(encoder, crtc->dev,
-			sde_crtc->cached_encoder_mask) {
+			cstate->encoder_mask) {
 		/* continue if copy encoder is encountered */
 		if (sde_crtc_state_in_clone_mode(encoder, cstate))
 			continue;
@@ -4533,7 +4545,6 @@ static void sde_crtc_atomic_flush_common(struct drm_crtc *crtc,
 	 */
 	if (unlikely(!sde_crtc->num_mixers))
 		return;
-
 	SDE_ATRACE_BEGIN("sde_crtc_atomic_flush");
 
 	/*
@@ -4892,6 +4903,9 @@ void sde_crtc_commit_kickoff(struct drm_crtc *crtc,
 	SDE_ATRACE_BEGIN("crtc_commit");
 
 	idle_pc_state = sde_crtc_get_property(cstate, CRTC_PROP_IDLE_PC_STATE);
+#ifdef MI_DISPLAY_MODIFY
+	mi_sde_crtc_check_layer_flags(crtc);
+#endif
 
 	sde_crtc->kickoff_in_progress = true;
 	sde_crtc->handle_fence_error_bw_update = false;
@@ -4979,6 +4993,7 @@ void sde_crtc_commit_kickoff(struct drm_crtc *crtc,
 	}
 
 	SDE_ATRACE_END("crtc_commit");
+
 }
 
 /**
@@ -4993,8 +5008,6 @@ static int _sde_crtc_vblank_enable(
 {
 	struct drm_crtc *crtc;
 	struct drm_encoder *enc;
-	enum sde_intf_mode intf_mode;
-	bool wb_intf_mode = false;
 
 	if (!sde_crtc) {
 		SDE_ERROR("invalid crtc\n");
@@ -5005,9 +5018,6 @@ static int _sde_crtc_vblank_enable(
 	SDE_EVT32(DRMID(crtc), enable, sde_crtc->enabled,
 			crtc->state->encoder_mask,
 			sde_crtc->cached_encoder_mask);
-
-	intf_mode = sde_crtc_get_intf_mode(crtc, crtc->state);
-	wb_intf_mode = ((intf_mode == INTF_MODE_WB_BLOCK) || (intf_mode == INTF_MODE_WB_LINE));
 
 	if (enable) {
 		int ret;
@@ -5021,7 +5031,7 @@ static int _sde_crtc_vblank_enable(
 
 		mutex_lock(&sde_crtc->crtc_lock);
 		drm_for_each_encoder_mask(enc, crtc->dev, sde_crtc->cached_encoder_mask) {
-			if (sde_encoder_in_clone_mode(enc) || wb_intf_mode)
+			if (sde_encoder_in_clone_mode(enc))
 				continue;
 
 			sde_encoder_register_vblank_callback(enc, sde_crtc_vblank_cb, (void *)crtc);
@@ -5030,7 +5040,7 @@ static int _sde_crtc_vblank_enable(
 	} else {
 		mutex_lock(&sde_crtc->crtc_lock);
 		drm_for_each_encoder_mask(enc, crtc->dev, sde_crtc->cached_encoder_mask) {
-			if (sde_encoder_in_clone_mode(enc) || wb_intf_mode)
+			if (sde_encoder_in_clone_mode(enc))
 				continue;
 
 			sde_encoder_register_vblank_callback(enc, NULL, NULL);
@@ -5045,20 +5055,12 @@ static int _sde_crtc_vblank_enable(
 
 static void _sde_crtc_reserve_resource(struct drm_crtc *crtc, struct drm_connector *conn)
 {
-	struct sde_kms *kms;
-	struct drm_encoder *encoder;
 	u32 min_transfer_time = 0, lm_count = 1;
 	u64 mode_clock_hz = 0, updated_fps = 0, topology_id;
-	u32 inf_factor = 105, lm_width, num_bubbles = 0;
+	struct drm_encoder *encoder;
 
 	if (!crtc || !conn)
 		return;
-
-	kms = _sde_crtc_get_kms(crtc);
-	if (!kms || !kms->catalog) {
-		SDE_ERROR("invalid kms\n");
-		return;
-	}
 
 	encoder = conn->state->best_encoder;
 	if (!sde_encoder_is_built_in_display(encoder))
@@ -5073,31 +5075,17 @@ static void _sde_crtc_reserve_resource(struct drm_crtc *crtc, struct drm_connect
 		updated_fps = drm_mode_vrefresh(&crtc->mode);
 
 	topology_id = sde_connector_get_topology_name(conn);
-	if (TOPOLOGY_DUALPIPE_MODE(topology_id)) {
+	if (TOPOLOGY_DUALPIPE_MODE(topology_id))
 		lm_count = 2;
-		if (SDE_HW_MAJOR(kms->catalog->hw_rev) == SDE_HW_MAJOR(SDE_HW_VER_A00))
-			num_bubbles = 40;
-	} else if (TOPOLOGY_QUADPIPE_MODE(topology_id)) {
+	else if (TOPOLOGY_QUADPIPE_MODE(topology_id))
 		lm_count = 4;
-		if (SDE_HW_MAJOR(kms->catalog->hw_rev) == SDE_HW_MAJOR(SDE_HW_VER_A00))
-			num_bubbles = 56;
-	}
-
-	if (SDE_HW_MAJOR(kms->catalog->hw_rev) == SDE_HW_MAJOR(SDE_HW_VER_900)
-			&& lm_count > 1)
-		num_bubbles = 30;
-
-	lm_width = (crtc->mode.hdisplay) / lm_count;
-	num_bubbles = mult_frac(num_bubbles, 100, lm_width);
-	inf_factor = max((100 + num_bubbles), inf_factor);
 
 	/* mode clock = [(h * v * fps * 1.05) / (num_lm)] */
-	mode_clock_hz = mult_frac(crtc->mode.htotal * crtc->mode.vtotal * updated_fps,
-				inf_factor, 100);
+	mode_clock_hz = mult_frac(crtc->mode.htotal * crtc->mode.vtotal * updated_fps, 105, 100);
 	mode_clock_hz = div_u64(mode_clock_hz, lm_count);
-	SDE_DEBUG("[%s] h=%d v=%d fps=%d lm=%d mode_clk=%u inf_factor=%u\n",
+	SDE_DEBUG("[%s] h=%d v=%d fps=%d lm=%d mode_clk=%u\n",
 			crtc->mode.name, crtc->mode.htotal, crtc->mode.vtotal,
-			updated_fps, lm_count, mode_clock_hz, inf_factor);
+			updated_fps, lm_count, mode_clock_hz);
 
 	sde_core_perf_crtc_reserve_res(crtc, mode_clock_hz);
 }
@@ -5355,8 +5343,8 @@ static void _sde_crtc_reset(struct drm_crtc *crtc)
 	/* mark mixer cfgs dirty before wiping them */
 	sde_crtc_clear_cached_mixer_cfg(crtc);
 
-	memset(sde_crtc->mixers, 0, sizeof(sde_crtc->mixers));
 	sde_crtc->num_mixers = 0;
+	memset(sde_crtc->mixers, 0, sizeof(sde_crtc->mixers));
 	sde_crtc->mixers_swapped = false;
 
 	/* disable clk & bw control until clk & bw properties are set */
@@ -8791,7 +8779,6 @@ static void sde_cp_crtc_apply_noise(struct drm_crtc *crtc,
 void sde_crtc_disable_cp_features(struct drm_crtc *crtc)
 {
 	sde_cp_disable_features(crtc);
-
 	if (!crtc->state->active)
 		sde_crtc_disable_dest_scaler(crtc);
 }

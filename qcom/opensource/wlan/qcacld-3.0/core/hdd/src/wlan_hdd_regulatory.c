@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1680,11 +1680,6 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 				 * continue to next statement
 				 */
 			case QDF_STA_MODE:
-				hdd_debug("Update vdev %d CAP IE", link_info->vdev_id);
-				sme_set_vdev_ies_per_band(hdd_ctx->mac_handle,
-							  link_info->vdev_id,
-							  QDF_STA_MODE);
-
 				sta_ctx =
 					WLAN_HDD_GET_STATION_CTX_PTR(link_info);
 				new_phy_mode = wlan_reg_get_max_phymode(pdev,
@@ -1723,6 +1718,9 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 							    pdev,
 							    link_info->vdev_id);
 				}
+				sme_set_vdev_ies_per_band(hdd_ctx->mac_handle,
+							  link_info->vdev_id,
+							  QDF_STA_MODE);
 				break;
 			default:
 				break;
@@ -1911,12 +1909,6 @@ static void hdd_handle_country_change_work_error(struct hdd_context *hdd_ctx,
 		qdf_sched_work(0, &hdd_ctx->country_change_work);
 	} else {
 		hdd_err("can not handle country change %d", errno);
-		/**
-		 * The error -ENODEV occurs if the HDD context is null or
-		 * the driver is unloading; hence, return.
-		 */
-		if (errno == -ENODEV)
-			return;
 		qdf_event_set_all(&hdd_ctx->regulatory_update_event);
 		qdf_mutex_acquire(&hdd_ctx->regulatory_status_lock);
 		hdd_ctx->is_regulatory_update_in_progress = false;

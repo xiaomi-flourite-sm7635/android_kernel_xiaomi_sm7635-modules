@@ -394,14 +394,8 @@ sch_bcn_update_he_ies(struct mac_context *mac_ctx, tpDphHashNode sta_ds,
 {
 	uint8_t session_bss_col_disabled_flag;
 	bool anything_changed = false;
-	struct wlan_channel *des_chan;
 
-	if (session->is_session_obss_color_collision_det_enabled ||
-	    !session->vdev)
-		return;
-
-	des_chan = wlan_vdev_mlme_get_des_chan(session->vdev);
-	if (!des_chan || !IS_WLAN_PHYMODE_HE(des_chan->ch_phymode))
+	if (session->is_session_obss_color_collision_det_enabled)
 		return;
 
 	if (session->he_op.present && bcn->he_op.present) {
@@ -737,10 +731,8 @@ static void __sch_beacon_process_for_session(struct mac_context *mac_ctx,
 			ap_constraint_change = true;
 		}
 
-		if (ap_constraint_change || (tpe_change && !skip_tpe) ||
-		    session->cal_tpc_post_csa) {
+		if (ap_constraint_change || (tpe_change && !skip_tpe)) {
 			lim_calculate_tpc(mac_ctx, session);
-			session->cal_tpc_post_csa = false;
 
 			if (tx_ops->set_tpc_power)
 				tx_ops->set_tpc_power(mac_ctx->psoc,

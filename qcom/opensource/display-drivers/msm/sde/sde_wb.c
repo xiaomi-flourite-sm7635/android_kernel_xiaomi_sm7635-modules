@@ -628,6 +628,11 @@ int sde_wb_connector_post_init(struct drm_connector *connector, void *display)
 		{WB_ROT_JOB2, "wb_rot_job2"},
 	};
 
+	static const struct drm_prop_enum_list e_wfd_wcg_mode[] = {
+		{WFD_WCG_DISABLE, "wfd_wcg_disable"},
+		{WFD_WCG_ENABLE, "wfd_wcg_enable"},
+	};
+
 	if (!connector || !display || !wb_dev->wb_cfg || !wb_dev->drm_dev->dev_private) {
 		SDE_ERROR("invalid params\n");
 		return -EINVAL;
@@ -691,6 +696,10 @@ int sde_wb_connector_post_init(struct drm_connector *connector, void *display)
 	msm_property_install_enum(&c_conn->property_info, "wb_usage_type",
 			0x0, 0, e_wb_usage_type, ARRAY_SIZE(e_wb_usage_type),
 			0, CONNECTOR_PROP_WB_USAGE_TYPE);
+
+	msm_property_install_enum(&c_conn->property_info, "wfd_wcg_mode",
+			0x0, 0, e_wfd_wcg_mode, ARRAY_SIZE(e_wfd_wcg_mode),
+			0, CONNECTOR_PROP_WFD_WCG_MODE);
 
 	_sde_wb_connector_install_dither_property(wb_dev);
 

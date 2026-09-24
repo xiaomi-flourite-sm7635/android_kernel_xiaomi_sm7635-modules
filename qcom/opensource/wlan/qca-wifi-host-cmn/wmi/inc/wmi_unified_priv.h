@@ -158,7 +158,7 @@ struct wmi_ext_dbg_msg {
 	uint32_t len;
 	uint64_t ts;
 	enum WMI_MSG_TYPE type;
-	uint8_t buf[];
+	uint8_t buf[0];
 };
 #endif /*WMI_EXT_DBG */
 
@@ -3237,13 +3237,6 @@ QDF_STATUS
 (*send_mlo_link_switch_req_cnf_cmd)(wmi_unified_t wmi_handle,
 				    struct wlan_mlo_link_switch_cnf *params);
 #endif
-#endif
-
-#if defined(WLAN_FEATURE_11BE_MLO) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
-QDF_STATUS
-(*extract_roam_ml_info)(wmi_unified_t wmi_handle, void *evt_buf,
-			struct roam_mlo_link_info *dst, uint64_t timestamp,
-			uint8_t idx);
 #endif
 
 #ifdef WLAN_FEATURE_SON

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -335,24 +335,13 @@
 		true, \
 		"Control to enable TCP limit output byte")
 
-#define WLAN_CFG_TCP_ADV_WIN_SCALE_MIN		0
-#define WLAN_CFG_TCP_ADV_WIN_SCALE_MAX		3
-#define WLAN_CFG_TCP_ADV_WIN_SCALE_DEFAULT	1
-#define DP_TCP_ADV_WIN_SCL_BIT			BIT(0)
-#define DP_TCP_ADV_WIN_SCALE_DISC_LOW		BIT(1)
-
 /*
  * <ini>
  * gTcpAdvWinScaleEnable - Control to enable  TCP adv window scaling
- * @Min: 0
- * @Max: 3
- * @Default: 1
+ * @Default: true
  *
  * This ini is used to enable dynamic configuration of TCP adv window scaling
  * system parameter.
- * Value 0: TCP Advanced WIN scale control disable.
- * Value 1: Enable TCP Advanced WIN scale control.
- * Value 3: Enable feature to set WIN Adv scale level low on disconnect.
  *
  * Supported Feature: Tcp Advance Window Scaling
  *
@@ -361,12 +350,9 @@
  * </ini>
  */
 #define CFG_DP_ENABLE_TCP_ADV_WIN_SCALE \
-		CFG_INI_UINT( \
+		CFG_INI_BOOL( \
 		"gTcpAdvWinScaleEnable", \
-		WLAN_CFG_TCP_ADV_WIN_SCALE_MIN, \
-		WLAN_CFG_TCP_ADV_WIN_SCALE_MAX, \
-		WLAN_CFG_TCP_ADV_WIN_SCALE_DEFAULT, \
-		CFG_VALUE_OR_DEFAULT, \
+		true, \
 		"Control to enable  TCP adv window scaling")
 
 /*
@@ -1107,7 +1093,7 @@
  * gEnableNUDTracking - Will enable or disable NUD tracking within driver
  * @Min: 0
  * @Max: 3
- * @Default: 0
+ * @Default: 2
  *
  * This ini is used to specify the behaviour of the driver for NUD tracking.
  * If the ini value is:-
@@ -1129,13 +1115,41 @@
 		CFG_INI_UINT("gEnableNUDTracking", \
 		 0, \
 		 3, \
-		 0, \
+		 2, \
 		 CFG_VALUE_OR_DEFAULT, "Driver NUD tracking behaviour")
 
 #define CFG_DP_ENABLE_NUD_TRACKING_ALL \
 			CFG(CFG_DP_ENABLE_NUD_TRACKING)
+
+/*
+ * <ini>
+ * gEnableNUDFailureNotify - Will enable or disable notify NUD failure event to fwk
+ * @Min: 0
+ * @Max: 4
+ * @Default: 0
+ *
+ * 0: Driver will track the NUD failures, and follow gEnableNUDTracking.
+ * 4: Driver will track the NUD failures, and notify nud failed event to fwk and
+ * driver won't disconnect AP;
+ *
+ * Supported Feature: STA
+ *
+ * Usage: External
+ *
+ * <ini>
+ */
+#define CFG_DP_ENABLE_NUD_FAILURE_EVENT_NOTIFY \
+		CFG_INI_UINT("gEnableNUDFailureNotify", \
+		 0, \
+		 4, \
+		 0, \
+		 CFG_VALUE_OR_DEFAULT, "Driver NUD failure event notify")
+
+#define CFG_DP_ENABLE_NUD_FAILURE_EVENT_NOTIFY_ALL \
+			CFG(CFG_DP_ENABLE_NUD_FAILURE_EVENT_NOTIFY)
 #else
 #define CFG_DP_ENABLE_NUD_TRACKING_ALL
+#define CFG_DP_ENABLE_NUD_FAILURE_EVENT_NOTIFY_ALL
 #endif
 
 #ifdef WLAN_SUPPORT_TXRX_HL_BUNDLE
@@ -1300,6 +1314,31 @@
 #define CFG_DP_FISA
 #endif
 
+/**
+ * <ini>
+ * gEnableBmissNoity - will enable or disable notify BMISS event to fwk
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ * 0: After driver recv bmiss event, will disconnect connection
+ * 1: After driver recv bmiss event, will notify fwk to handle bmiss event and
+ * driver won't disconnect AP;
+ *
+ * Supported Feature: STA(BTC)
+ * Usage: External
+ *
+ * <ini>
+ */
+#define CFG_DP_ENABLE_BMISS_EVENT_NOTIFY \
+	CFG_INI_UINT("gEnableBmissNoity", \
+			 0, \
+			 1, \
+			 0, \
+			 CFG_VALUE_OR_DEFAULT, "Enable/Disable notify BMISS event notify to fwk")
+
+#define CFG_DP_ENABLE_BMISS_EVENT_NOTIFY_ALL \
+	CFG(CFG_DP_ENABLE_BMISS_EVENT_NOTIFY)
+
 /*TODO Flow control part to be moved to DP later*/
 
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
@@ -1371,6 +1410,8 @@
 	CFG_DP_BUS_BANDWIDTH \
 	CFG_DP_DRIVER_TCP_DELACK \
 	CFG_DP_ENABLE_NUD_TRACKING_ALL \
+	CFG_DP_ENABLE_NUD_FAILURE_EVENT_NOTIFY_ALL \
+	CFG_DP_ENABLE_BMISS_EVENT_NOTIFY_ALL \
 	CFG_DP_CONFIG_DP_TRACE_ALL \
 	CFG_DP_HL_BUNDLE \
 	CFG_DP_FISA

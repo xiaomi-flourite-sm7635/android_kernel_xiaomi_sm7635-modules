@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -1847,7 +1847,6 @@ void csr_update_session_he_cap(struct mac_context *mac_ctx,
 	tDot11fIEhe_cap *he_cap;
 	struct wlan_objmgr_vdev *vdev;
 	struct mlme_legacy_priv *mlme_priv;
-	uint16_t sap_rx_mcs_map;
 
 	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(mac_ctx->psoc,
 						    session->vdev_id,
@@ -1869,21 +1868,11 @@ void csr_update_session_he_cap(struct mac_context *mac_ctx,
 	 * for STA
 	 */
 	persona = wlan_vdev_mlme_get_opmode(vdev);
-
-	if (persona == QDF_SAP_MODE) {
-		sap_rx_mcs_map =
-			wlan_mlme_get_sap_he_rx_mcs_map_160(mac_ctx->psoc);
-		sap_rx_mcs_map =
-			wlan_mlme_get_min_he_mcs_map(sap_rx_mcs_map,
-						     *((uint16_t *)he_cap->rx_he_mcs_map_160));
-		qdf_mem_copy(&he_cap->rx_he_mcs_map_160, &sap_rx_mcs_map,
-			     sizeof(sap_rx_mcs_map));
-	}
-
 	if (persona == QDF_SAP_MODE || persona == QDF_P2P_GO_MODE) {
 		he_cap->twt_request = false;
 		if (!he_cap->twt_responder)
 			he_cap->flex_twt_sched = false;
+
 	} else if (persona == QDF_STA_MODE || persona == QDF_P2P_CLIENT_MODE) {
 		he_cap->twt_responder = false;
 		if (!he_cap->twt_request)
@@ -2293,7 +2282,7 @@ void csr_cm_get_sta_cxn_info(struct mac_context *mac_ctx, uint8_t vdev_id,
 #endif
 #endif
 
-QDF_STATUS csr_roam_call_callback(struct mac_context *mac, uint32_t vdev_id,
+QDF_STATUS csr_roam_call_callback(struct mac_context *mac, uint32_t sessionId,
 				  struct csr_roam_info *roam_info,
 				  eRoamCmdStatus u1, eCsrRoamResult u2)
 {
@@ -2301,21 +2290,21 @@ QDF_STATUS csr_roam_call_callback(struct mac_context *mac, uint32_t vdev_id,
 	struct csr_roam_session *pSession;
 	qdf_freq_t chan_freq;
 
-	if (!CSR_IS_SESSION_VALID(mac, vdev_id)) {
-		sme_err("Session ID: %d is not valid", vdev_id);
+	if (!CSR_IS_SESSION_VALID(mac, sessionId)) {
+		sme_err("Session ID: %d is not valid", sessionId);
 		QDF_ASSERT(0);
 		return QDF_STATUS_E_FAILURE;
 	}
-	pSession = CSR_GET_SESSION(mac, vdev_id);
+	pSession = CSR_GET_SESSION(mac, sessionId);
 
 	if (false == pSession->sessionActive) {
 		sme_debug("Session is not Active");
 		return QDF_STATUS_E_FAILURE;
 	}
-	chan_freq = wlan_get_operation_chan_freq_vdev_id(mac->pdev, vdev_id);
+	chan_freq = wlan_get_operation_chan_freq_vdev_id(mac->pdev, sessionId);
 
 	if (mac->session_roam_complete_cb)
-		status = mac->session_roam_complete_cb(mac->psoc, vdev_id,
+		status = mac->session_roam_complete_cb(mac->psoc, sessionId,
 						       roam_info, u1, u2);
 
 	return status;
@@ -3649,7 +3638,6 @@ static QDF_STATUS csr_roam_issue_set_context_req(struct mac_context *mac_ctx,
 	struct wlan_crypto_key *crypto_key;
 	uint8_t wep_key_idx = 0;
 	struct wlan_objmgr_vdev *vdev;
-	const uint8_t *peer_mac = (const uint8_t *)mac_addr->bytes;
 
 	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(mac_ctx->psoc, session_id,
 						    WLAN_LEGACY_MAC_ID);
@@ -3657,14 +3645,14 @@ static QDF_STATUS csr_roam_issue_set_context_req(struct mac_context *mac_ctx,
 		sme_err("VDEV object not found for session_id %d", session_id);
 		return QDF_STATUS_E_INVAL;
 	}
-	cipher = wlan_crypto_get_cipher(vdev, peer_mac, unicast, key_idx);
+	cipher = wlan_crypto_get_cipher(vdev, unicast, key_idx);
 	if (IS_WEP_CIPHER(cipher)) {
 		wep_key_idx = wlan_crypto_get_default_key_idx(vdev, !unicast);
-		crypto_key = wlan_crypto_get_key(vdev, peer_mac, wep_key_idx);
+		crypto_key = wlan_crypto_get_key(vdev, wep_key_idx);
 		csr_update_wep_key_peer_macaddr(vdev, crypto_key, unicast,
 						mac_addr);
 	} else {
-		crypto_key = wlan_crypto_get_key(vdev, peer_mac, key_idx);
+		crypto_key = wlan_crypto_get_key(vdev, key_idx);
 	}
 
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_MAC_ID);
@@ -5548,6 +5536,11 @@ static void csr_fill_connected_profile(struct mac_context *mac_ctx,
 		goto purge_list;
 
 	wlan_fill_bss_desc_from_scan_entry(mac_ctx, bss_desc, cur_node->entry);
+	pe_debug("Dump scan entry frm:");
+	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_DEBUG,
+			   cur_node->entry->raw_frame.ptr,
+			   cur_node->entry->raw_frame.len);
+
 	src_cfg.uint_value = bss_desc->mbo_oce_enabled_ap;
 	wlan_cm_roam_cfg_set_value(mac_ctx->psoc, vdev_id, MBO_OCE_ENABLED_AP,
 				   &src_cfg);

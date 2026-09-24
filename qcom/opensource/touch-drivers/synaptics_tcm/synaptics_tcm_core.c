@@ -34,6 +34,7 @@
 #include <linux/kthread.h>
 #include <linux/interrupt.h>
 #include <linux/regulator/consumer.h>
+#include <linux/pinctrl/consumer.h>
 #include "synaptics_tcm_core.h"
 
 /* #define RESET_ON_RESUME */
@@ -93,8 +94,6 @@
 #define HOST_DOWNLOAD_WAIT_MS 100
 
 #define HOST_DOWNLOAD_TIMEOUT_MS 1000
-
-/* #define CREATE_SYSFS */
 
 #define DYNAMIC_CONFIG_SYSFS_DIR_NAME "dynamic_config"
 
@@ -1756,7 +1755,7 @@ static int syna_tcm_enable_irq(struct syna_tcm_hcd *tcm_hcd, bool en, bool ns)
 
 		if (irq_freed) {
 			retval = request_threaded_irq(tcm_hcd->irq, NULL,
-					syna_tcm_isr, bdata->irq_flags,
+					syna_tcm_isr, bdata->irq_flags | IRQF_ONESHOT,
 					PLATFORM_DRIVER_NAME, tcm_hcd);
 			if (retval < 0) {
 				LOGE(tcm_hcd->pdev->dev.parent,
@@ -3352,9 +3351,7 @@ err_pinctrl_get:
 static int syna_tcm_probe(struct platform_device *pdev)
 {
 	int retval;
-#ifdef CREATE_SYSFS
 	int idx;
-#endif
 	struct syna_tcm_hcd *tcm_hcd;
 	const struct syna_tcm_board_data *bdata;
 	const struct syna_tcm_hw_interface *hw_if;
@@ -3493,7 +3490,6 @@ static int syna_tcm_probe(struct platform_device *pdev)
 		}
 	}
 
-#ifdef CREATE_SYSFS
 	sysfs_dir = kobject_create_and_add(PLATFORM_DRIVER_NAME,
 			&pdev->dev.kobj);
 	if (!sysfs_dir) {
@@ -3534,7 +3530,6 @@ static int syna_tcm_probe(struct platform_device *pdev)
 			goto err_sysfs_create_dynamic_config_file;
 		}
 	}
-#endif
 
 #ifdef CONFIG_DRM
 	if (active_panel) {
@@ -3598,7 +3593,6 @@ err_create_run_kthread:
 	fb_unregister_client(&tcm_hcd->fb_notifier);
 #endif
 
-#ifdef CREATE_SYSFS
 err_sysfs_create_dynamic_config_file:
 	for (idx--; idx >= 0; idx--) {
 		sysfs_remove_file(tcm_hcd->dynamnic_config_sysfs_dir,
@@ -3626,7 +3620,6 @@ err_sysfs_create_dir:
 	if (bdata->reset_gpio >= 0)
 		syna_tcm_set_gpio(tcm_hcd, bdata->reset_gpio, false, 0, 0);
 
-#endif
 err_config_gpio:
 	syna_tcm_enable_regulator(tcm_hcd, false);
 
@@ -3688,8 +3681,11 @@ err_enable_irq:
 	return retval;
 }
 
-
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0))
 static int syna_tcm_remove(struct platform_device *pdev)
+#else
+static void syna_tcm_remove(struct platform_device *pdev)
+#endif
 {
 	int idx;
 	struct syna_tcm_module_handler *mod_handler;
@@ -3779,8 +3775,11 @@ static int syna_tcm_remove(struct platform_device *pdev)
 	RELEASE_BUFFER(tcm_hcd->in);
 
 	kfree(tcm_hcd);
-
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 11, 0))
 	return 0;
+#else
+	return;
+#endif
 }
 
 #ifdef CONFIG_PM

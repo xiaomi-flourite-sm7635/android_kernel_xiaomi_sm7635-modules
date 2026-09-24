@@ -122,21 +122,14 @@ static bool scm_is_rnr_present(struct meta_rnr_channel *chan,
 	return false;
 }
 
-static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
+static void scm_add_rnr_channel_db(struct wlan_objmgr_psoc *psoc,
 				   struct scan_cache_entry *entry)
 {
 	uint32_t chan_freq;
 	uint8_t is_6g_bss, i;
-	uint8_t *cc;
 	struct meta_rnr_channel *channel;
 	struct rnr_bss_info *rnr_bss;
 	struct scan_rnr_node *rnr_node;
-	struct wlan_country_ie *cc_ie;
-	struct wlan_objmgr_psoc *psoc;
-
-	psoc = wlan_pdev_get_psoc(pdev);
-	if (!psoc)
-		return;
 
 	chan_freq = entry->channel.chan_freq;
 	is_6g_bss = wlan_reg_is_6ghz_chan_freq(chan_freq);
@@ -164,39 +157,20 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 	if (!entry->ie_list.rnrie)
 		return;
 
-	cc_ie = util_scan_entry_country(entry);
-	if (cc_ie && cc_ie->len)
-		cc = cc_ie->cc;
-	else
-		cc = NULL;
-
 	for (i = 0; i < MAX_RNR_BSS; i++) {
 		rnr_bss = &entry->rnr.bss_info[i];
 		/* Skip if entry is not valid */
 		if (!rnr_bss->channel_number)
 			continue;
-
-		chan_freq =
-			wlan_reg_chan_opclass_to_freq_prefer_global(pdev, cc,
-								    rnr_bss->channel_number,
-								    rnr_bss->operating_class);
-
+		chan_freq = wlan_reg_chan_opclass_to_freq(rnr_bss->channel_number,
+							  rnr_bss->operating_class,
+							  true);
 		channel = scm_get_chan_meta(psoc, chan_freq);
 		if (!channel) {
 			scm_debug("Failed to get chan Meta freq %d", chan_freq);
 			continue;
 		}
 		channel->bss_beacon_probe_count++;
-
-		/* Skip non Tx MBSSID profile */
-		if (QDF_GET_BITS(rnr_bss->bss_params, 2, 2) == 0x1) {
-			scm_debug("skip nontx freq %d: " QDF_MAC_ADDR_FMT " short ssid %x",
-				  chan_freq,
-				  QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
-				  rnr_bss->short_ssid);
-			continue;
-		}
-
 		/* Don't add RNR entry if list is full */
 		if (qdf_list_size(&channel->rnr_list) >= WLAN_MAX_RNR_COUNT) {
 			scm_debug("List is full");
@@ -285,7 +259,7 @@ void scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
 	}
 }
 #else
-static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
+static void scm_add_rnr_channel_db(struct wlan_objmgr_psoc *psoc,
 				   struct scan_cache_entry *entry)
 {
 }
@@ -1417,7 +1391,7 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 		}
 
 		if (bcn->save_rnr_info)
-			scm_add_rnr_channel_db(pdev, scan_entry);
+			scm_add_rnr_channel_db(psoc, scan_entry);
 
 		qdf_mem_free(scan_node);
 	}
@@ -2084,7 +2058,7 @@ void scm_update_rnr_from_scan_cache(struct wlan_objmgr_pdev *pdev)
 					     &scan_db->scan_hash_tbl[i], NULL);
 		while (cur_node) {
 			entry = cur_node->entry;
-			scm_add_rnr_channel_db(pdev, entry);
+			scm_add_rnr_channel_db(psoc, entry);
 			next_node =
 				scm_get_next_node(scan_db,
 						  &scan_db->scan_hash_tbl[i],
@@ -2455,3 +2429,38 @@ bool scm_scan_entries_contain_cmn_akm(struct scan_cache_entry *entry1,
 
 	return true;
 }
+
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+QDF_STATUS scm_add_scan_result(struct wlan_objmgr_pdev *pdev,
+		struct scan_cache_entry *params, uint8_t *ie, uint32_t ie_len)
+{
+	QDF_STATUS status;
+	struct wlan_objmgr_psoc *psoc = NULL;
+	struct scan_cache_entry *scan_entry = NULL;
+
+	if (!pdev || !params) {
+		scm_err("pdev or scan_entry is null");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	psoc = wlan_pdev_get_psoc(pdev);
+	if (!psoc) {
+		scm_err("psoc is null");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	scan_entry = util_scan_gen_fast_connect_scan_entry(pdev, params, ie, ie_len);
+	if (!scan_entry)
+		return QDF_STATUS_E_NOMEM;
+
+	status = scm_add_update_entry(psoc, pdev, scan_entry);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		util_scan_free_cache_entry(scan_entry);
+		return status;
+	}
+
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+// END WIFI_P2pEnhance

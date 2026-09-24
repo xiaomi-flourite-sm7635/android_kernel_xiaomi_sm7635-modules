@@ -411,4 +411,10 @@ scm_get_mld_addr_by_link_addr(struct wlan_objmgr_pdev *pdev,
  */
 bool scm_scan_entries_contain_cmn_akm(struct scan_cache_entry *entry1,
 				      struct scan_cache_entry *entry2);
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+QDF_STATUS scm_add_scan_result(struct wlan_objmgr_pdev *pdev,
+			struct scan_cache_entry *params, uint8_t *ie, uint32_t ie_len);
+#endif
+// END WIFI_P2pEnhance
 #endif

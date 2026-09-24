@@ -29,8 +29,11 @@
 #include "cam_cpas_hw.h"
 #include "cam_compat.h"
 #include "camera_main.h"
+#include "hwid.h"
 
-#define CAM_REQ_MGR_EVENT_MAX 30
+/* Xiaomi: enlarge from 30 to 200 */
+#define CAM_REQ_MGR_EVENT_MAX 200
+/* Xiaomi: enlarge from 30 to 200 */
 #define CAM_I3C_MASTER_COMPAT "qcom,geni-i3c"
 
 static struct cam_req_mgr_device g_dev;
@@ -47,6 +50,7 @@ static const struct of_device_id cam_sensor_module_dt_match[] = {
 	{ .compatible = "qcom,eeprom" },
 	{.compatible = "qcom,actuator"},
 	{ .compatible = "qcom,ois" },
+	{.compatible = "qcom,aperture"},
 	{.compatible = "qcom,camera-flash", .data = NULL},
 	{}
 };
@@ -699,11 +703,6 @@ static long cam_private_ioctl(struct file *file, void *fh,
 	case CAM_REQ_MGR_REQUEST_DUMP: {
 		struct cam_dump_req_cmd cmd;
 
-		if (!cam_debugfs_available()) {
-			CAM_DBG(CAM_CORE, "Dump request disabled");
-			return 0;
-		}
-
 		if (k_ioctl->size != sizeof(cmd))
 			return -EINVAL;
 
@@ -1085,6 +1084,52 @@ static int cam_req_mgr_remove(struct platform_device *pdev)
 	component_master_del(&pdev->dev, &cam_req_mgr_component_master_ops);
 	return 0;
 }
+
+int cam_get_hw_device(void)
+{
+	int hw_country_ver = -1;	// 0: China, 1: GL 2：IN
+	int hw_version_build = -1;	// 0: P0, 1: P1
+	int hw_version_platform = -1; // flourite = 14
+	int hw_device = -1; 			// 0: CN-P0, 1: GL-P0, 2: CN-P1, 3: GL-P1
+
+	hw_country_ver = get_hw_country_version();
+	hw_version_build = get_hw_version_build();
+	hw_version_platform = get_hw_version_platform();
+	CAM_INFO(CAM_CRM,"hw_version_platform=%d, hw_country_ver=%d, hw_version_build=%d", hw_version_platform, hw_country_ver, hw_version_build);
+
+	if (hw_version_platform == HARDWARE_PROJECT_P16U)
+	{
+		if (hw_country_ver == P16U_CN_country_ver) // CN
+		{
+			if (hw_version_build == P16U_P0_hw_version_build) // P0
+			{
+				hw_device = P16U_CN_P0;
+				CAM_INFO(CAM_CRM,"this is cn-p0, hw_device=%d", hw_device);
+			}
+			else
+			{
+				hw_device = P16U_CN_P1;
+				CAM_INFO(CAM_CRM,"this is Non-cn-p0, hw_device=%d", hw_device);
+			}
+		}
+		else // GL
+		{
+			if (hw_version_build == P16U_P0_hw_version_build) // P0
+			{
+				hw_device = P16U_GL_P0;
+				CAM_INFO(CAM_CRM,"this is gl-p0, hw_device=%d", hw_device);
+			}
+			else
+			{
+				hw_device = P16U_GL_P1;
+				CAM_INFO(CAM_CRM,"this is Non-gl-p0 devices, hw_device=%d", hw_device);
+			}
+		}
+	}
+
+	return hw_device;
+}
+EXPORT_SYMBOL(cam_get_hw_device);
 
 static int cam_req_mgr_probe(struct platform_device *pdev)
 {

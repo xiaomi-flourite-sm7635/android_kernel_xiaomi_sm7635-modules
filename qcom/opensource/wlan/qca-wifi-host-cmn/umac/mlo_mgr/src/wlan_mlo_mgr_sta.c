@@ -873,16 +873,16 @@ mlo_prepare_and_send_connect(struct wlan_objmgr_vdev *vdev,
 
 	mlo_update_connect_req_chan_info(&req);
 
-	qdf_copy_macaddr(&req.bssid, &link_info.link_addr);
-	qdf_copy_macaddr(&req.bssid_hint, &link_info.link_addr);
+	qdf_mem_copy(req.bssid.bytes,
+		     link_info.link_addr.bytes,
+		     QDF_MAC_ADDR_SIZE);
 
-	qdf_mem_copy(&req.ml_parnter_info, &ml_parnter_info,
+	qdf_mem_copy(&req.ml_parnter_info,
+		     &ml_parnter_info,
 		     sizeof(struct mlo_partner_info));
 
 	req.vdev_id = wlan_vdev_get_id(vdev);
 	req.ssid.length = ssid.length;
-	req.chan_freq = link_info.chan_freq;
-	req.link_id =  link_info.link_id;
 	qdf_mem_copy(&req.ssid.ssid, &ssid.ssid, ssid.length);
 	if (mld_addr)
 		qdf_copy_macaddr(&req.mld_addr, mld_addr);
@@ -937,17 +937,6 @@ static void mlo_send_link_connect(struct wlan_objmgr_vdev *vdev,
 
 	if(wlan_vdev_mlme_is_mlo_link_vdev(vdev))
 		return;
-
-	copied_conn_req_lock_acquire(mlo_dev_ctx->sta_ctx);
-	if (!mlo_dev_ctx->sta_ctx->copied_conn_req) {
-		mlo_dev_ctx->sta_ctx->copied_conn_req =
-			qdf_mem_malloc(sizeof(struct wlan_cm_connect_req));
-		if (mlo_dev_ctx->sta_ctx->copied_conn_req) {
-			wlan_cm_get_active_connect_req_param(vdev,
-							     mlo_dev_ctx->sta_ctx->copied_conn_req);
-		}
-	}
-	copied_conn_req_lock_release(mlo_dev_ctx->sta_ctx);
 
 	mlo_sta_get_vdev_list(vdev, &vdev_count, wlan_vdev_list);
 	for (i = 0; i < vdev_count; i++) {

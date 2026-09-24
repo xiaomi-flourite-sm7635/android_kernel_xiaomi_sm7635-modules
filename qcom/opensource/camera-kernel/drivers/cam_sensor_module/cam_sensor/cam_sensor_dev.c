@@ -282,6 +282,7 @@ static int cam_sensor_i2c_component_bind(struct device *dev,
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.reg_bank_unlock_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.reg_bank_lock_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.read_settings.list_head));
+	INIT_LIST_HEAD(&(s_ctrl->i2c_data.write_settings.list_head));  //xiaomi add
 
 	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++) {
 		INIT_LIST_HEAD(&(s_ctrl->i2c_data.per_frame[i].list_head));
@@ -473,6 +474,7 @@ static int cam_sensor_component_bind(struct device *dev,
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.reg_bank_unlock_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.reg_bank_lock_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.read_settings.list_head));
+	INIT_LIST_HEAD(&(s_ctrl->i2c_data.write_settings.list_head));  //xiaomi add
 
 	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++) {
 		INIT_LIST_HEAD(&(s_ctrl->i2c_data.per_frame[i].list_head));
@@ -499,6 +501,17 @@ static int cam_sensor_component_bind(struct device *dev,
 
 	g_i3c_sensor_data[soc_info->index].s_ctrl = s_ctrl;
 	init_completion(&g_i3c_sensor_data[soc_info->index].probe_complete);
+
+	/* xiaomi add for cci debug start */
+	rc = cam_cci_dev_create_debugfs_entry(s_ctrl->sensor_name,
+		s_ctrl->soc_info.index, CAM_SENSOR_NAME,
+		&s_ctrl->io_master_info, s_ctrl->cci_i2c_master,
+		&s_ctrl->cci_debug);
+	if (rc) {
+		CAM_WARN(CAM_SENSOR, "debugfs creation failed");
+		rc = 0;
+	}
+	/* xiaomi add for cci debug end */
 
 	return rc;
 
@@ -537,6 +550,9 @@ static void cam_sensor_component_unbind(struct device *dev,
 	cam_sensor_shutdown(s_ctrl);
 	mutex_unlock(&(s_ctrl->cam_sensor_mutex));
 	cam_unregister_subdev(&(s_ctrl->v4l2_dev_str));
+	/* xiaomi add for cci debug start */
+	cam_cci_dev_remove_debugfs_entry((void *)s_ctrl->cci_debug);
+	/* xiaomi add for cci debug end */
 	soc_info = &s_ctrl->soc_info;
 	for (i = 0; i < soc_info->num_clk; i++) {
 		if (!soc_info->clk[i]) {
@@ -577,8 +593,27 @@ static int32_t cam_sensor_driver_platform_probe(
 {
 	int rc = 0;
 
-	CAM_DBG(CAM_SENSOR, "Adding Sensor component for %s", pdev->name);
-	rc = component_add(&pdev->dev, &cam_sensor_component_ops);
+	int hw_device = -1;
+	int customEnable = -1;
+	int customHwid = -1;
+	hw_device = cam_get_hw_device();
+	of_property_read_u32(pdev->dev.of_node, "custom-enable", &customEnable);
+	of_property_read_u32(pdev->dev.of_node, "custom-hwid", &customHwid);
+
+	if (customEnable == 1)
+	{
+		if (hw_device == customHwid)
+		{
+			CAM_DBG(CAM_SENSOR, "custom:Adding Sensor component for %s", pdev->name);
+			rc = component_add(&pdev->dev, &cam_sensor_component_ops);
+		}
+	}
+	else
+	{
+		CAM_DBG(CAM_SENSOR, "Adding Sensor component for %s", pdev->name);
+		rc = component_add(&pdev->dev, &cam_sensor_component_ops);
+	}
+
 	if (rc)
 		CAM_ERR(CAM_SENSOR, "failed to add component rc: %d", rc);
 
@@ -633,177 +668,6 @@ static struct i3c_driver cam_sensor_i3c_driver = {
 	},
 };
 
-/*Begin zihao.li for [Task][FP5-1587] FP5 camera device info in camera.ko on 20230628*/
-#include <linux/init.h>
-#include <linux/kernel.h>
-#include <linux/device.h>
-#include <linux/module.h>
-
-#define show_function(name) \
-    static ssize_t show_##name(struct device *dev,\
-            struct device_attribute *att,\
-            char *buf)\
-{\
-    return snprintf(buf, PAGE_SIZE, "%s\n", name);\
-}\
-
-static struct class *deviceinfo_class = NULL;
-static struct device *deviceinfo_dev = NULL;
-
-unsigned char CamNameB[128] = "NA:NA:NA";
-EXPORT_SYMBOL(CamNameB);
-show_function(CamNameB);
-DEVICE_ATTR(CamNameB, 0444, show_CamNameB, NULL);
-
-unsigned char CamNameF[128] = "NA:NA:NA";
-EXPORT_SYMBOL(CamNameF);
-show_function(CamNameF);
-DEVICE_ATTR(CamNameF, 0444, show_CamNameF, NULL);
-
-unsigned char CamNameB2[128] = "NA:NA:NA";
-EXPORT_SYMBOL(CamNameB2);
-show_function(CamNameB2);
-DEVICE_ATTR(CamNameB2, 0444, show_CamNameB2, NULL);
-
-unsigned char CamOTPB[128] = "NA:NA:NA";
-EXPORT_SYMBOL(CamOTPB);
-show_function(CamOTPB);
-
-unsigned char CamOTPF[128] = "NA:NA:NA";
-EXPORT_SYMBOL(CamOTPF);
-show_function(CamOTPF);
-
-unsigned char CamOTPB2[128] = "NA:NA:NA";
-EXPORT_SYMBOL(CamOTPB2);
-show_function(CamOTPB2);
-
-static ssize_t CamOTPB_store(struct device *dev,struct  device_attribute *attr,const char *buf,size_t count)
-{
-    int camerab_otp_flag;
-    sscanf(buf,"%d",&camerab_otp_flag);
-    if(camerab_otp_flag==1){
-        printk("otp flag=1\n");
-        sprintf(CamOTPB,"%s","1");
-    }else{
-        printk("otp flag = 0\n");
-        sprintf(CamOTPB,"%s%","0");
-    }
-
-    return count;
-}
-
-static ssize_t CamOTPF_store(struct device *dev,struct  device_attribute *attr,const char *buf,size_t count)
-{
-    int camerab_otp_flag;
-    sscanf(buf,"%d",&camerab_otp_flag);
-    if(camerab_otp_flag==1){
-        printk("otp flag=1\n");
-        sprintf(CamOTPF,"%s","1");
-    }else{
-        printk("otp flag = 0\n");
-        sprintf(CamOTPF,"%s","0");
-    }
-
-    return count;
-}
-
-static ssize_t CamOTPB2_store(struct device *dev,struct  device_attribute *attr,const char *buf,size_t count)
-{
-        int camerab_otp_flag;
-        sscanf(buf,"%d",&camerab_otp_flag);
-
-        if(camerab_otp_flag==1){
-                printk("otp flag=1\n");
-                sprintf(CamOTPB2,"%s","1");
-        }else{
-            printk("otp flag = 0\n");
-            sprintf(CamOTPB2,"%s","0");
-        }
-
-        return count;
-}
-
-DEVICE_ATTR(CamOTPB, 0664, show_CamOTPB, CamOTPB_store);
-DEVICE_ATTR(CamOTPF, 0664, show_CamOTPF, CamOTPF_store);
-DEVICE_ATTR(CamOTPB2, 0664, show_CamOTPB2, CamOTPB2_store);
-
-static struct device_attribute *attr[] = {
-    &dev_attr_CamNameB,
-    &dev_attr_CamNameF,
-    &dev_attr_CamNameB2,
-    &dev_attr_CamOTPB,
-    &dev_attr_CamOTPF,
-    &dev_attr_CamOTPB2,
-    NULL,
-};
-
-static int create_deviceinfo_nodes(void)
-{
-    int ret, i = 0;
-
-    while (attr[i] != NULL) {
-        ret = device_create_file(deviceinfo_dev,  attr[i]);
-        if (ret < 0) {
-            pr_err("Failed to create file for node:%s\n", attr[i]->attr.name);
-            i = i - 1;
-            while (i >= 0) {
-                device_remove_file(deviceinfo_dev, attr[i]);
-                i--;
-            }
-            return -EFAULT;
-        }
-        i++;
-    }
-
-    return 0;
-}
-
-static void remove_deviceinfo_nodes(void)
-{
-    int i = 0;
-
-    while (attr[i] != NULL) {
-        device_remove_file(deviceinfo_dev, attr[i]);
-        i++;
-    }
-}
-
-int deviceinfo_init(void)
-{
-    int ret = -1;
-
-    deviceinfo_class = class_create(THIS_MODULE, "deviceinfo");
-    if (IS_ERR(deviceinfo_class)) {
-        pr_err("Failed to create device info class!\n");
-        return -ENOMEM;
-    }
-
-    deviceinfo_dev = device_create(deviceinfo_class, NULL, 0, NULL,
-                                   "device_info");
-    if (IS_ERR(deviceinfo_dev)) {
-        pr_err("Failed to create device info device!\n");
-        return -ENOMEM;
-    }
-
-    ret = create_deviceinfo_nodes();
-    if (ret) {
-        pr_err("Failed to create all device info nodes!\n");
-        return -EFAULT;
-    }
-
-    return ret;
-}
-
-void deviceinfo_exit(void)
-{
-    remove_deviceinfo_nodes();
-    device_destroy(deviceinfo_class, 0);
-    class_destroy(deviceinfo_class);
-
-    return;
-}
-/*End   zihao.li for [Task][FP5-1587] FP5 camera device info in camera.ko on 20230628*/
-
 int cam_sensor_driver_init(void)
 {
 	int rc;
@@ -815,12 +679,6 @@ int cam_sensor_driver_init(void)
 		CAM_ERR(CAM_SENSOR, "platform_driver_register Failed: rc = %d", rc);
 		return rc;
 	}
-
-	/*Begin zihao.li for [Task][FP5-1587] FP5 camera device info in camera.ko on 20230628*/
-	rc = deviceinfo_init();
-	if(rc)
-		CAM_ERR(CAM_SENSOR, "deviceinfo_init failed rc = %d", rc);
-	/*End   zihao.li for [Task][FP5-1587] FP5 camera device info in camera.ko on 20230628*/
 
 	rc = i2c_add_driver(&cam_sensor_i2c_driver);
 	if (rc) {
@@ -870,10 +728,6 @@ void cam_sensor_driver_exit(void)
 
 	platform_driver_unregister(&cam_sensor_platform_driver);
 	i2c_del_driver(&cam_sensor_i2c_driver);
-
-	/*Begin zihao.li for [Task][FP5-1587] FP5 camera device info in camera.ko on 20230628*/
-	deviceinfo_exit();
-	/*End   zihao.li for [Task][FP5-1587] FP5 camera device info in camera.ko on 20230628*/
 
 	dev = of_find_node_by_path(I3C_SENSOR_DEV_ID_DT_PATH);
 	if (!dev) {

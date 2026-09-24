@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -365,15 +365,8 @@ static void hdd_set_recovery_in_progress(void *data, uint8_t val)
 {
 	cds_set_recovery_in_progress(val);
 	/* SSR can be triggred late cleanup existing queue for kernel handshake */
-	if (!qdf_in_interrupt()) {
-		struct hdd_context *hdd_ctx;
-
-		hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
-		if (!hdd_ctx)
-			return;
-
-		wlan_cfg80211_cleanup_scan_queue(hdd_ctx->pdev, NULL);
-	}
+	if (!qdf_in_interrupt())
+		hdd_soc_recovery_cleanup();
 }
 
 /**
@@ -830,7 +823,6 @@ static int __hdd_soc_probe(struct device *dev,
 	probe_fail_cnt = 0;
 	cds_set_driver_loaded(true);
 	cds_set_load_in_progress(false);
-	hdd_start_complete(0);
 	hdd_thermal_mitigation_register(hdd_ctx, dev);
 
 	hdd_set_sar_init_index(hdd_ctx);
@@ -892,9 +884,12 @@ static int hdd_soc_probe(struct device *dev,
 
 	osif_psoc_sync_trans_stop(psoc_sync);
 
+	hdd_start_complete(0);
+
 	return 0;
 
 destroy_sync:
+	hdd_start_complete(errno);
 	osif_psoc_sync_unregister(dev);
 	osif_psoc_sync_wait_for_ops(psoc_sync);
 

@@ -77,7 +77,6 @@
 #include "wlan_cfg80211_tdls.h"
 #include "wlan_tdls_api.h"
 #include "lim_mlo.h"
-#include "wlan_mlo_mgr_link_switch.h"
 
 /* define NO_PAD_TDLS_MIN_8023_SIZE to NOT padding: See CR#447630
    There was IOT issue with cisco 1252 open mode, where it pads
@@ -225,7 +224,7 @@ static void populate_dot11f_tdls_offchannel_params(
 				tDot11fIESuppChannels *suppChannels,
 				tDot11fIESuppOperatingClasses *suppOperClasses)
 {
-	uint32_t num_chans = CFG_VALID_CHANNEL_LIST_LEN;
+	uint32_t numChans = CFG_VALID_CHANNEL_LIST_LEN;
 	uint8_t validChan[CFG_VALID_CHANNEL_LIST_LEN];
 	uint8_t i, count_opclss = 1;
 	uint8_t valid_count = 0;
@@ -237,10 +236,11 @@ static void populate_dot11f_tdls_offchannel_params(
 	uint8_t nss_2g;
 	uint8_t nss_5g;
 	qdf_freq_t ch_freq;
+	bool is_vlp_country;
+	uint8_t ap_cc[REG_ALPHA2_LEN + 1];
 	uint8_t reg_cc[REG_ALPHA2_LEN + 1];
-	int num_6g_chans = 0;
 
-	num_chans = mac->mlme_cfg->reg.valid_channel_list_num;
+	numChans = mac->mlme_cfg->reg.valid_channel_list_num;
 
 	if (wlan_reg_is_24ghz_ch_freq(pe_session->curr_op_freq))
 		band = BAND_2G;
@@ -252,8 +252,13 @@ static void populate_dot11f_tdls_offchannel_params(
 	nss_2g = QDF_MIN(mac->vdev_type_nss_2g.tdls,
 			 mac->user_configured_nss);
 
+	wlan_cm_get_country_code(mac->pdev, pe_session->vdev_id, ap_cc);
+	wlan_reg_read_current_country(mac->psoc, reg_cc);
+	is_vlp_country = wlan_reg_ctry_support_vlp(ap_cc) &&
+			 wlan_reg_ctry_support_vlp(reg_cc);
+
 	/* validating the channel list for DFS and 2G channels */
-	for (i = 0; i < num_chans; i++) {
+	for (i = 0; i < numChans; i++) {
 		ch_freq = mac->mlme_cfg->reg.valid_channel_freq_list[i];
 
 		validChan[i] = wlan_reg_freq_to_chan(mac->pdev,
@@ -277,14 +282,12 @@ static void populate_dot11f_tdls_offchannel_params(
 			}
 		}
 
-		if (wlan_reg_is_6ghz_chan_freq(ch_freq)) {
-			if (!tdls_is_6g_freq_allowed(mac->pdev, ch_freq)) {
-				pe_debug("6 GHz freq non VLP or non PSC %d",
-					 ch_freq);
-				continue;
-			} else {
-				num_6g_chans += 1;
-			}
+		if (wlan_reg_is_6ghz_chan_freq(ch_freq) &&
+		    !(is_vlp_country &&
+		      wlan_reg_is_6ghz_psc_chan_freq(ch_freq))) {
+			pe_debug("skipping is_vlp_country %d or non-psc channel %d",
+				 is_vlp_country, ch_freq);
+			continue;
 		}
 
 		if (valid_count >= ARRAY_SIZE(suppChannels->bands))
@@ -317,7 +320,6 @@ static void populate_dot11f_tdls_offchannel_params(
 		break;
 	}
 
-	wlan_reg_read_current_country(mac->psoc, reg_cc);
 	op_class = wlan_reg_dmn_get_opclass_from_channel(
 		reg_cc,
 		wlan_reg_freq_to_chan(mac->pdev, pe_session->curr_op_freq),
@@ -330,7 +332,7 @@ static void populate_dot11f_tdls_offchannel_params(
 
 	for (i = 0; i < numClasses; i++) {
 		if (wlan_reg_is_6ghz_op_class(mac->pdev, classes[i]) &&
-		    !num_6g_chans)
+		    !is_vlp_country)
 			continue;
 
 		suppOperClasses->classes[count_opclss] = classes[i];
@@ -3331,7 +3333,7 @@ lim_tdls_populate_eht_mcs(struct mac_context *mac_ctx, tpDphHashNode stads,
 {
 	lim_populate_eht_mcs_set(mac_ctx, &stads->supportedRates,
 				 &stads->eht_config, session_entry,
-				 session_entry->ch_width);
+				 session_entry->nss);
 }
 #else
 static void
@@ -3720,54 +3722,38 @@ static void lim_tdls_update_hash_node_info(struct mac_context *mac,
 	return;
 }
 
+/*
+ * Add STA for TDLS setup procedure
+ */
 static QDF_STATUS lim_tdls_setup_add_sta(struct mac_context *mac,
-					 struct tdls_add_sta_req *pAddStaReq,
-					 struct pe_session *pe_session)
+					    struct tdls_add_sta_req *pAddStaReq,
+					    struct pe_session *pe_session)
 {
 	tpDphHashNode sta = NULL;
-	struct wlan_objmgr_peer *peer;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	uint16_t aid = 0;
-	uint8_t peer_vdev_id;
 
 	sta = dph_lookup_hash_entry(mac, pAddStaReq->peermac.bytes, &aid,
 				       &pe_session->dph.dphHashTable);
 	if (!sta && pAddStaReq->tdls_oper == TDLS_OPER_UPDATE) {
-		pe_err("vdev:%d TDLS update peer is given without peer creation",
-		       pe_session->vdev_id);
+		pe_err("TDLS update peer is given without peer creation");
 		return QDF_STATUS_E_FAILURE;
 	}
-
 	if (sta && pAddStaReq->tdls_oper == TDLS_OPER_ADD) {
-		pe_err("vdev:%d TDLS entry for peer: " QDF_MAC_ADDR_FMT " already exist, cannot add new entry",
-		       pe_session->vdev_id,
-		       QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes));
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	peer = wlan_objmgr_get_peer_by_mac(mac->psoc, pAddStaReq->peermac.bytes,
-					   WLAN_TDLS_NB_ID);
-	if (peer) {
-		peer_vdev_id = wlan_vdev_get_id(wlan_peer_get_vdev(peer));
-		wlan_objmgr_peer_release_ref(peer, WLAN_TDLS_NB_ID);
-
-		if (pAddStaReq->tdls_oper == TDLS_OPER_ADD) {
-			pe_err("vdev:%d peer: " QDF_MAC_ADDR_FMT " already exist on vdev:%d, cannot add new entry",
-			       pe_session->vdev_id,
-			       QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes),
-			       peer_vdev_id);
-			return QDF_STATUS_E_EXISTS;
-		}
+		pe_err("TDLS entry for peer: "QDF_MAC_ADDR_FMT " already exist, cannot add new entry",
+			QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes));
+			return QDF_STATUS_E_FAILURE;
 	}
 
 	if (sta && sta->staType != STA_ENTRY_TDLS_PEER) {
 		pe_err("Non TDLS entry for peer: "QDF_MAC_ADDR_FMT " already exist",
 			QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes));
-		return QDF_STATUS_E_FAILURE;
+			return QDF_STATUS_E_FAILURE;
 	}
 
 	if (!sta) {
 		aid = lim_assign_peer_idx(mac, pe_session);
+
 		if (!aid) {
 			pe_err("No more free AID for peer: "QDF_MAC_ADDR_FMT,
 				QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes));
@@ -3779,11 +3765,13 @@ static QDF_STATUS lim_tdls_setup_add_sta(struct mac_context *mac,
 
 		pe_debug("Aid: %d, for peer: " QDF_MAC_ADDR_FMT,
 			aid, QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes));
-		sta = dph_get_hash_entry(mac, aid,
-					 &pe_session->dph.dphHashTable);
+		sta =
+			dph_get_hash_entry(mac, aid,
+					   &pe_session->dph.dphHashTable);
+
 		if (sta) {
-			/* asynchronous */
-			lim_del_sta(mac, sta, false, pe_session);
+			(void)lim_del_sta(mac, sta, false /*asynchronous */,
+					  pe_session);
 			lim_delete_dph_hash_entry(mac, sta->staAddr, aid,
 						  pe_session);
 		}
@@ -3792,25 +3780,25 @@ static QDF_STATUS lim_tdls_setup_add_sta(struct mac_context *mac,
 					 aid, &pe_session->dph.dphHashTable);
 
 		if (!sta) {
-			pe_err("vdev::%d add hash entry failed",
-			       pe_session->vdev_id);
-			CLEAR_PEER_AID_BITMAP(pe_session->peerAIDBitmap, aid);
+			pe_err("add hash entry failed");
 			QDF_ASSERT(0);
 			return QDF_STATUS_E_FAILURE;
 		}
 	}
 
 	lim_tdls_update_hash_node_info(mac, sta, pAddStaReq, pe_session);
+
 	sta->staType = STA_ENTRY_TDLS_PEER;
 
-	status = lim_add_sta(mac, sta,
-			     pAddStaReq->tdls_oper == TDLS_OPER_UPDATE,
-			     pe_session);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		CLEAR_PEER_AID_BITMAP(pe_session->peerAIDBitmap, aid);
+	status =
+		lim_add_sta(mac, sta,
+			    (pAddStaReq->tdls_oper ==
+			     TDLS_OPER_UPDATE) ? true : false, pe_session);
+
+	if (QDF_STATUS_SUCCESS != status) {
+		/* should not fail */
 		QDF_ASSERT(0);
 	}
-
 	return status;
 }
 
@@ -3860,10 +3848,10 @@ static QDF_STATUS lim_send_sme_tdls_add_sta_rsp(struct mac_context *mac,
 	add_sta_rsp->session_id = sessionId;
 	add_sta_rsp->status_code = status;
 
-	if (peerMac)
+	if (peerMac) {
 		qdf_mem_copy(add_sta_rsp->peermac.bytes,
 			     (uint8_t *) peerMac, QDF_MAC_ADDR_SIZE);
-
+	}
 	if (updateSta)
 		add_sta_rsp->tdls_oper = TDLS_OPER_UPDATE;
 	else
@@ -3896,41 +3884,26 @@ QDF_STATUS lim_process_tdls_add_sta_rsp(struct mac_context *mac, void *msg,
 	uint16_t aid = 0;
 
 	SET_LIM_PROCESS_DEFD_MESGS(mac, true);
+	pe_debug("staMac: "QDF_MAC_ADDR_FMT,
+	       QDF_MAC_ADDR_REF(pAddStaParams->staMac));
 
-	sta = dph_lookup_hash_entry(mac, pAddStaParams->staMac, &aid,
-				    &pe_session->dph.dphHashTable);
-	if (!sta) {
-		pe_err("staMac: " QDF_MAC_ADDR_FMT,
-		       QDF_MAC_ADDR_REF(pAddStaParams->staMac));
-		CLEAR_PEER_AID_BITMAP(pe_session->peerAIDBitmap,
-				      pAddStaParams->assocId);
-		lim_release_peer_idx(mac, pAddStaParams->assocId, pe_session);
+	if (pAddStaParams->status != QDF_STATUS_SUCCESS) {
+		QDF_ASSERT(0);
+		pe_err("Add sta failed ");
 		status = QDF_STATUS_E_FAILURE;
 		goto add_sta_error;
 	}
 
-	if (pAddStaParams->status != QDF_STATUS_SUCCESS) {
-		pe_err("vdev:%d TDLS add sta failed", pe_session->vdev_id);
-		CLEAR_PEER_AID_BITMAP(pe_session->peerAIDBitmap, aid);
-		lim_release_peer_idx(mac, sta->assocId, pe_session);
-
-		if (sta &&
-		    dph_delete_hash_entry(mac, pAddStaParams->staMac,
-					  sta->assocId,
-					  &pe_session->dph.dphHashTable))
-			pe_err("Unable to delete Hash entry");
-
+	sta = dph_lookup_hash_entry(mac, pAddStaParams->staMac, &aid,
+				       &pe_session->dph.dphHashTable);
+	if (!sta) {
+		pe_err("sta is NULL ");
 		status = QDF_STATUS_E_FAILURE;
-		QDF_ASSERT(0);
 		goto add_sta_error;
 	}
 
 	sta->mlmStaContext.mlmState = eLIM_MLM_LINK_ESTABLISHED_STATE;
 	sta->valid = 1;
-	pe_debug("vdev:%d sta_mac: " QDF_MAC_ADDR_FMT,
-		 pe_session->vdev_id,
-		 QDF_MAC_ADDR_REF(pAddStaParams->staMac));
-
 add_sta_error:
 	status = lim_send_sme_tdls_add_sta_rsp(mac, pe_session->smeSessionId,
 					       pAddStaParams->staMac,
@@ -4159,8 +4132,7 @@ QDF_STATUS lim_process_sme_tdls_add_sta_req(struct mac_context *mac,
 	struct pe_session *pe_session;
 	uint8_t session_id;
 
-	pe_debug("vdev:%d TDLS Add STA Request Received",
-		 add_sta_req->session_id);
+	pe_debug("TDLS Add STA Request Received");
 	pe_session =
 		pe_find_session_by_bssid(mac, add_sta_req->bssid.bytes,
 					 &session_id);
@@ -4309,16 +4281,15 @@ static void lim_check_aid_and_delete_peer(struct mac_context *p_mac,
 			if (!stads)
 				goto skip;
 
-			pe_err("Deleting "QDF_MAC_ADDR_FMT,
-			       QDF_MAC_ADDR_REF(stads->staAddr));
+			pe_debug("Deleting "QDF_MAC_ADDR_FMT,
+				QDF_MAC_ADDR_REF(stads->staAddr));
 
 			if (!lim_is_roam_synch_in_progress(p_mac->psoc,
-							   session_entry))
-				lim_send_deauth_mgmt_frame(
-					p_mac,
+							   session_entry)) {
+				lim_send_deauth_mgmt_frame(p_mac,
 					REASON_DEAUTH_NETWORK_LEAVING,
 					stads->staAddr, session_entry, false);
-
+			}
 			/* Delete TDLS peer */
 			qdf_mem_copy(mac_addr.bytes, stads->staAddr,
 				     QDF_MAC_ADDR_SIZE);
@@ -4378,7 +4349,7 @@ void lim_update_tdls_2g_bw(struct pe_session *session)
  * Return: QDF_STATUS_SUCCESS on success, error code otherwise
  */
 QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
-				 struct pe_session *session_entry)
+				    struct pe_session *session_entry)
 {
 
 	if (!session_entry) {
@@ -4389,55 +4360,38 @@ QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
 	lim_check_aid_and_delete_peer(mac_ctx, session_entry);
 
 	tgt_tdls_delete_all_peers_indication(mac_ctx->psoc,
-					     session_entry->vdev_id);
+					     session_entry->smeSessionId);
 
 	if (lim_is_roam_synch_in_progress(mac_ctx->psoc, session_entry))
 		return QDF_STATUS_SUCCESS;
 
-	/*
-	 * For Link Switch disconnect, TDLS set state to disable will be sent
-	 * to firmware after the disconnect complete indication. So don't
-	 * send TDLS set state disable from here.
-	 */
-	if (mlo_mgr_is_link_switch_in_progress(session_entry->vdev))
-		return QDF_STATUS_SUCCESS;
-
-	/*
-	 * In case of CSA, Only peers in lim and TDLS component
+	/* In case of CSA, Only peers in lim and TDLS component
 	 * needs to be removed and set state disable command
 	 * should not be sent to fw as there is no way to enable
 	 * TDLS in FW after vdev restart.
 	 */
-	if (session_entry->tdls_send_set_state_disable)
+	if (session_entry->tdls_send_set_state_disable) {
 		tgt_tdls_peers_deleted_notification(mac_ctx->psoc,
-						    session_entry->smeSessionId);
+						    session_entry->
+						    smeSessionId);
+	}
 
 	/* reset the set_state_disable flag */
 	session_entry->tdls_send_set_state_disable = true;
-
 	return QDF_STATUS_SUCCESS;
 }
 
-QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev)
-{
-	struct mac_context *mac = cds_get_context(QDF_MODULE_ID_PE);
-	struct pe_session *session;
-
-	if (!mac)
-		return QDF_STATUS_E_FAILURE;
-
-	session = pe_find_session_by_vdev_id(mac, wlan_vdev_get_id(vdev));
-	if (!session) {
-		pe_debug("No pe_session found for vdev_id:%d",
-			 wlan_vdev_get_id(vdev));
-		return QDF_STATUS_E_FAILURE;
-	}
-
-	return lim_delete_tdls_peers(mac, session);
-}
-
-QDF_STATUS
-lim_process_sme_del_all_tdls_peers(struct mac_context *p_mac, uint32_t *msg_buf)
+/**
+ * lim_process_sme_del_all_tdls_peers(): process delete tdls peers
+ * @p_mac: pointer to mac context
+ * @msg_buf: message buffer
+ *
+ * This function processes request to delete tdls peers
+ *
+ * Return: Success: QDF_STATUS_SUCCESS Failure: Error value
+ */
+QDF_STATUS lim_process_sme_del_all_tdls_peers(struct mac_context *p_mac,
+						 uint32_t *msg_buf)
 {
 	struct tdls_del_all_tdls_peers *msg;
 	struct pe_session *session_entry;

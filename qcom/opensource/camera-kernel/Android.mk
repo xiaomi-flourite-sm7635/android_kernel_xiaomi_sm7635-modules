@@ -1,9 +1,14 @@
+ifneq (, $(filter $(call get-component-name), miodm))
 CAMERA_DLKM_ENABLED := true
 ifeq ($(TARGET_KERNEL_DLKM_DISABLE), true)
 	ifeq ($(TARGET_KERNEL_DLKM_CAMERA_OVERRIDE), false)
 		CAMERA_DLKM_ENABLED := false;
 	endif
 endif
+
+ifeq ($(call get-miodm-device-name), suiren)
+CAMERA_DLKM_ENABLED := false
+endif # ifeq ($(call get-miodm-device-name), suiren)
 
 ifeq ($(CAMERA_DLKM_ENABLED),true)
 ifeq ($(call is-board-platform-in-list, $(TARGET_BOARD_PLATFORM)),true)
@@ -16,24 +21,30 @@ DLKM_DIR := $(TOP)/device/qcom/common/dlkm
 LOCAL_MODULE_DDK_BUILD := true
 
 LOCAL_MODULE_DDK_SUBTARGET_REGEX := "camera.*"
-ifeq ($(TARGET_BOARD_PLATFORM), volcano)
-  LOCAL_MODULE_DDK_SUBTARGET_REGEX := "$(TARGET_BOARD_PLATFORM)_camera.*"
-endif
-ifneq ($(filter $(TARGET_BASE_PRODUCT),$(T2M_CUSTO_PRODUCTS)),)
-  LOCAL_MODULE_DDK_SUBTARGET_REGEX := "camera.*"
+ifeq ($(call get-miodm-device-name), amethyst)
+  LOCAL_MODULE_DDK_SUBTARGET_REGEX := "amethyst_camera.*"
 endif
 
+LOCAL_MODULE_DDK_SUBTARGET_REGEX := "camera.*"
+ifeq ($(call get-miodm-device-name), flourite)
+  LOCAL_MODULE_DDK_SUBTARGET_REGEX := "flourite_camera.*"
+endif
+
+#ifeq ($(TARGET_BOARD_PLATFORM), volcano)
+# LOCAL_MODULE_DDK_SUBTARGET_REGEX := "$(TARGET_BOARD_PLATFORM)_camera.*"
+#endif
+
 # List of board platforms for which MMRM driver API should be enabled
-MMRM_BOARDS := taro parrot kalama pineapple crow volcano fps
+MMRM_BOARDS := taro parrot kalama pineapple crow
 
 # List of board platforms for which Synx V2 vendor driver API should be enabled
 SYNX_VENDOR_BOARDS := pineapple
 
 # List of board platforms for which SMCINVOKE_DLKM driver API should be enabled
-SMCINVOKE_DLKM_BOARDS := pineapple
+SMCINVOKE_DLKM_BOARDS := pineapple volcano
 
 # List of board platforms for which SMMU_PROXY_DLKM driver API should be enabled
-SMMU_PROXY_DLKM_BOARDS := pineapple
+SMMU_PROXY_DLKM_BOARDS := pineapple volcano
 
 CAMERA_SRC_FILES := \
                     $(addprefix $(LOCAL_PATH)/, $(call all-named-files-under,*.h,drivers dt-bindings include))\
@@ -98,5 +109,42 @@ else
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
 endif
 
+# MIUI ADD: Camera_CameraSkyNet
+include $(CLEAR_VARS)
+# For incremental compilation support.
+LOCAL_SRC_FILES             :=  \
+                                $(shell find $(LOCAL_PATH)/config -L -type f)      \
+                                $(shell find $(LOCAL_PATH)/drivers -L -type f)     \
+                                $(shell find $(LOCAL_PATH)/dt-bindings -L -type f) \
+                                $(shell find $(LOCAL_PATH)/include -L -type f)     \
+                                $(LOCAL_PATH)/Android.mk \
+                                $(LOCAL_PATH)/board.mk   \
+                                $(LOCAL_PATH)/product.mk \
+                                $(LOCAL_PATH)/Kbuild
+LOCAL_MODULE_PATH           := $(KERNEL_MODULES_OUT)
+LOCAL_MODULE                := cameralog.ko
+LOCAL_MODULE_TAGS           := optional
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+# END Camera_CameraSkyNet
+
+# MIUI ADD: Camera_CameraOpt
+include $(CLEAR_VARS)
+# For incremental compilation support.
+LOCAL_SRC_FILES             :=  \
+                                $(shell find $(LOCAL_PATH)/config -L -type f)      \
+                                $(shell find $(LOCAL_PATH)/drivers -L -type f)     \
+                                $(shell find $(LOCAL_PATH)/dt-bindings -L -type f) \
+                                $(shell find $(LOCAL_PATH)/include -L -type f)     \
+                                $(LOCAL_PATH)/Android.mk \
+                                $(LOCAL_PATH)/board.mk   \
+                                $(LOCAL_PATH)/product.mk \
+                                $(LOCAL_PATH)/Kbuild
+LOCAL_MODULE_PATH           := $(KERNEL_MODULES_OUT)
+LOCAL_MODULE                := cameramsger.ko
+LOCAL_MODULE_TAGS           := optional
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+# END Camera_CameraOpt
+
 endif # End of check for board platform
 endif # ifeq ($(CAMERA_DLKM_ENABLED),true)
+endif

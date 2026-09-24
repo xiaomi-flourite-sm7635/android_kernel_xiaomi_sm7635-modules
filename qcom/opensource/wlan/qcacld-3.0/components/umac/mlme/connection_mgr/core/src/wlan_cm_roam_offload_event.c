@@ -564,14 +564,15 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 	    !is_multi_link_roam(sync_ind)) {
 		mlme_err("vdev:%d Ignoring RSI as its already in progress on roamed vdev:%d",
 			 vdev_id, sync_ind->roamed_vdev_id);
-		return QDF_STATUS_E_FAILURE;
+		status = QDF_STATUS_E_FAILURE;
+		goto err;
 	}
 
 	status = cm_fw_roam_sync_start_ind(vdev, sync_ind);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		mlme_err("LFR3: vdev:%d CSR Roam synch cb failed", vdev_id);
 		wlan_cm_free_roam_synch_frame_ind(rso_cfg);
-		return status;
+		goto err;
 	}
 
 	/* 24 byte MAC header and 12 byte to ssid IE */
@@ -584,7 +585,8 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 		} else {
 			mlme_err("LFR3: MLO: vdev:%d Invalid link Beacon Length",
 				 vdev_id);
-			return QDF_STATUS_E_FAILURE;
+			status = QDF_STATUS_E_FAILURE;
+			goto err;
 		}
 	} else if (sync_ind->beacon_probe_resp_length >
 			(QDF_IEEE80211_3ADDR_HDR_LEN + MAC_B_PR_SSID_OFFSET)) {
@@ -611,18 +613,18 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 	} else {
 		mlme_err("LFR3: vdev:%d Invalid Beacon Length:%d", vdev_id,
 			 sync_ind->beacon_probe_resp_length);
-		return QDF_STATUS_E_FAILURE;
+		status = QDF_STATUS_E_FAILURE;
+		goto err;
 	}
 
 	if (QDF_IS_STATUS_ERROR(cm_roam_pe_sync_callback(sync_ind, vdev_id,
 							 ie_len))) {
 		mlme_err("LFR3: vdev:%d PE roam synch cb failed", vdev_id);
-		return QDF_STATUS_E_BUSY;
+		status = QDF_STATUS_E_BUSY;
+		goto err;
 	}
 
-	status = cm_roam_update_vdev(vdev, sync_ind);
-	if (QDF_IS_STATUS_ERROR(status))
-		return status;
+	cm_roam_update_vdev(vdev, sync_ind);
 
 	/*
 	 * update phy_mode in wma to avoid mismatch in phymode between host and
@@ -638,5 +640,6 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 					     vdev_id,
 					     sync_ind);
 
+err:
 	return status;
 }

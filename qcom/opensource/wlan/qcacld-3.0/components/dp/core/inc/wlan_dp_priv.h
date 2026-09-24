@@ -100,7 +100,6 @@ struct dp_rtpm_tput_policy_context {
  * @enable_tcp_delack: enable Dynamic Configuration of Tcp Delayed Ack
  * @enable_tcp_limit_output: enable TCP limit output
  * @enable_tcp_adv_win_scale: enable  TCP adv window scaling
- * @tcp_adv_win_scl_disc_lvl_low: Set TCP adv win scale level LOW on disconnect
  * @tcp_delack_thres_high: High Threshold inorder to trigger TCP Del Ack
  * indication
  * @tcp_delack_thres_low: Low Threshold inorder to trigger TCP Del Ack
@@ -126,6 +125,8 @@ struct dp_rtpm_tput_policy_context {
  * @enable_dp_trace: Enable/Disable DP trace
  * @dp_trace_config: DP trace configuration
  * @enable_nud_tracking: Enable/Disable nud tracking
+ * @enable_nud_failure_event_notify: Enable/Disable nud failure event notify
+ * @enable_bmiss_event_notify: Enable/Disable bmiss event notify
  * @pkt_bundle_threshold_high: tx bundle high threshold
  * @pkt_bundle_threshold_low: tx bundle low threshold
  * @pkt_bundle_timer_value: tx bundle timer value in ms
@@ -165,7 +166,6 @@ struct wlan_dp_psoc_cfg {
 	uint32_t enable_tcp_delack;
 	bool     enable_tcp_limit_output;
 	uint32_t enable_tcp_adv_win_scale;
-	bool tcp_adv_win_scl_disc_lvl_low;
 	uint32_t tcp_delack_thres_high;
 	uint32_t tcp_delack_thres_low;
 	uint32_t tcp_tx_high_tput_thres;
@@ -193,6 +193,8 @@ struct wlan_dp_psoc_cfg {
 	uint8_t dp_trace_config[DP_TRACE_CONFIG_STRING_LENGTH];
 #endif
 	uint8_t enable_nud_tracking;
+	uint8_t enable_nud_failure_event_notify;
+	uint8_t enable_bmiss_event_notify;
 
 #ifdef WLAN_SUPPORT_TXRX_HL_BUNDLE
 	uint32_t pkt_bundle_threshold_high;
@@ -692,6 +694,9 @@ struct wlan_dp_intf {
 #ifdef FEATURE_DIRECT_LINK
 	struct direct_link_info direct_link_config;
 #endif
+#ifdef WLAN_FEATURE_OSRTP
+	struct bpf_prog __rcu *osrtp_prog;
+#endif
 	uint8_t num_links;
 	struct wlan_dp_link *def_link;
 	qdf_spinlock_t dp_link_list_lock;
@@ -711,8 +716,10 @@ struct wlan_dp_intf {
  * @vdev_lock: vdev spin lock
  * @conn_info: STA connection information
  * @destroyed: flag to indicate dp_link destroyed (logical delete)
+ * @cdp_vdev_registered: flag to indicate if corresponding CDP vdev
+ *			 is registered
+ * @cdp_vdev_deleted: flag to indicate if corresponding CDP vdev is deleted
  * @inactive_list_elem: list node for membership in dp link inactive list
- * @cdp_vdev_list: cdp_vdev list to which the dp_link is registered
  */
 struct wlan_dp_link {
 	qdf_list_node_t node;
@@ -724,8 +731,9 @@ struct wlan_dp_link {
 	qdf_spinlock_t vdev_lock;
 	struct wlan_dp_conn_info conn_info;
 	uint8_t destroyed;
+	uint8_t cdp_vdev_registered;
+	uint8_t	cdp_vdev_deleted;
 	TAILQ_ENTRY(wlan_dp_link) inactive_list_elem;
-	TAILQ_HEAD(, cdp_vdev) cdp_vdev_list;
 };
 
 /**

@@ -575,4 +575,23 @@ wlan_scan_entries_contain_cmn_akm(struct scan_cache_entry *entry1,
 {
 	return scm_scan_entries_contain_cmn_akm(entry1, entry2);
 }
+
+// MIUI ADD: WIFI_P2pEnhance
+#ifdef WLAN_FEATURE_FAST_CONNECT
+/**
+ * wlan_scan_add_result() - The Public API to add scan results
+ * @pdev: pdev info
+ * @filter: Filters
+ *
+ * This function fetches add scan result
+ *
+ * Return: scan list pointer
+ */
+static inline QDF_STATUS wlan_scan_add_result(struct wlan_objmgr_pdev *pdev,
+		struct scan_cache_entry *params, uint8_t *ie, uint32_t ie_len)
+{
+	return scm_add_scan_result(pdev, params, ie, ie_len);
+}
+#endif
+// END WIFI_P2pEnhance
 #endif

@@ -18,6 +18,7 @@
 #include "camera_main.h"
 #include "cam_eeprom_dev.h"
 #include "cam_eeprom_core.h"
+#include "cam_req_mgr_dev.h"
 
 #if IS_ENABLED(CONFIG_SPECTRA_USE_RPMH_DRV_API)
 #define CAM_RSC_DRV_IDENTIFIER "cam_rsc"
@@ -228,6 +229,29 @@ void cam_cpastop_scm_write(struct cam_cpas_hw_errata_wa *errata_wa)
 
 static int camera_platform_compare_dev(struct device *dev, const void *data)
 {
+	int hw_device = -1;
+	int customEnable = -1;
+	int customHwid = -1;
+	struct platform_device *pdev = NULL;
+	if (dev != NULL) {
+		pdev = to_platform_device(dev);
+		if (pdev != NULL)
+		{
+			if ((strstr(pdev->name, "p0") != NULL) ||
+				(strstr(pdev->name, "p1") != NULL))
+			{
+				hw_device = cam_get_hw_device();
+				of_property_read_u32(dev->of_node, "custom-enable", &customEnable);
+				of_property_read_u32(dev->of_node, "custom-hwid", &customHwid);
+				CAM_INFO(CAM_ISP, "this device: customHwid:%d, hw_device:%d, customEnable:%d", customHwid, hw_device, customEnable);
+				if (customEnable == 1 && hw_device != customHwid)
+				{
+					CAM_INFO(CAM_ISP, "skip this device:%s", pdev->name);
+					return 0;
+				}
+			}
+		}
+	}
 	return platform_bus_type.match(dev, (struct device_driver *) data);
 }
 
@@ -461,6 +485,13 @@ static inline int camera_component_compare_dev(struct device *dev, void *data)
 	return dev == data;
 }
 
+#if IS_ENABLED(CONFIG_MIISP)
+static inline int camera_component_compare_ispv4_dev(struct device *dev, void *data)
+{
+        return !strcmp(dev_name(dev), "ispv4-cam");
+}
+#endif
+
 /* Add component matches to list for master of aggregate driver */
 int camera_component_match_add_drivers(struct device *master_dev,
 	struct component_match **match_list)
@@ -475,6 +506,11 @@ int camera_component_match_add_drivers(struct device *master_dev,
 		rc = -EINVAL;
 		goto end;
 	}
+
+#if IS_ENABLED(CONFIG_MIISP)
+        component_match_add(master_dev, match_list,
+                            camera_component_compare_ispv4_dev, NULL);
+#endif
 
 	for (i = 0; i < ARRAY_SIZE(cam_component_platform_drivers); i++) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
@@ -825,7 +861,6 @@ bool cam_secure_get_vfe_fd_port_config(void)
 	return true;
 #endif
 }
-
 #if KERNEL_VERSION(5, 10, 0) <= LINUX_VERSION_CODE
 int cam_get_subpart_info(uint32_t *part_info, uint32_t max_num_cam)
 {
