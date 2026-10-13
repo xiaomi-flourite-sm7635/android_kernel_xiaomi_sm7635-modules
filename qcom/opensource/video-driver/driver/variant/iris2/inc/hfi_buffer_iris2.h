@@ -8,6 +8,7 @@
 #define __HFI_BUFFER_IRIS2__
 
 #include <linux/types.h>
+#include <linux/minmax.h>
 #include "hfi_property.h"
 
 /* Firmware sizing macros intentionally accept mixed integer types. */
