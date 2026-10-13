@@ -257,6 +257,11 @@ static long xiaomi_touch_dev_ioctl(struct file *file, unsigned int cmd,
 
 	if (IOCTL_MAGIC_NUMBER != user_magic_number)
 		return -EINVAL;
+#ifdef CONFIG_TOUCHSCREEN_FLOURITE
+	/* The ROM UDFPS handler still uses the three-int SET_CUR_VALUE ABI. */
+	if (cmd == _IO('T', SET_CUR_VALUE))
+		return xiaomi_touch_legacy_fod(client_private_data, arg);
+#endif
 	LOG_VERBOSE("user cmd %d, user size %d, user magic number %d", user_cmd,
 		    user_size, user_magic_number);
 	switch (user_cmd) {

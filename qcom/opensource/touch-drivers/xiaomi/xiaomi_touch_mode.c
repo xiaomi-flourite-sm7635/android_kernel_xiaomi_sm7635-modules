@@ -1064,6 +1064,42 @@ static void xiaomi_touch_set_mode_value_non_lock(common_data_t *common_data)
  * with others where not involving hardware.
  */
 static DEFINE_MUTEX(ioctl_operation_mutex);
+#ifdef CONFIG_TOUCHSCREEN_FLOURITE
+int xiaomi_touch_legacy_fod(private_data_t *client_private_data,
+			    unsigned long arg)
+{
+	__s32 legacy[3];
+	xiaomi_touch_driver_param_t *driver;
+	common_data_t data = { 0 };
+
+	if (copy_from_user(legacy, (void __user *)arg, sizeof(legacy)))
+		return -EFAULT;
+	/* Only the primary-panel FOD down/up command has a legacy consumer. */
+	if (legacy[0] != 0 || legacy[1] != THP_FOD_DOWNUP_CTL ||
+	    (legacy[2] != 0 && legacy[2] != 1))
+		return -EINVAL;
+	if (client_private_data->touch_id >= 0 &&
+	    client_private_data->touch_id != legacy[0])
+		return -EINVAL;
+
+	driver = get_xiaomi_touch_driver_param(legacy[0]);
+	if (!driver || !get_xiaomi_touch_data(legacy[0]) ||
+	    !driver->hardware_operation.set_mode_value)
+		return -ENODEV;
+
+	data.touch_id = legacy[0];
+	data.cmd = SET_CUR_VALUE;
+	data.mode = THP_FOD_DOWNUP_CTL;
+	data.data_len = 1;
+	data.data_buf[0] = legacy[2];
+	/* Do not change client selection/list membership for a legacy ioctl. */
+	mutex_lock(&ioctl_operation_mutex);
+	xiaomi_touch_set_mode_value(&data);
+	mutex_unlock(&ioctl_operation_mutex);
+	return 0;
+}
+#endif
+
 int xiaomi_touch_mode(private_data_t *client_private_data, u32 user_size,
 		      unsigned long arg)
 {

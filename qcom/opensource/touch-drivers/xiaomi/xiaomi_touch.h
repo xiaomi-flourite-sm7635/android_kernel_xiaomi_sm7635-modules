@@ -445,6 +445,10 @@ int xiaomi_touch_operation_init(xiaomi_touch_t *temp_xiaomi_touch);
 int xiaomi_touch_operation_remove(void);
 
 int xiaomi_touch_init_touch_mode(s8 touch_id, struct device *dev);
+#ifdef CONFIG_TOUCHSCREEN_FLOURITE
+int xiaomi_touch_legacy_fod(private_data_t *client_private_data,
+			    unsigned long arg);
+#endif
 int xiaomi_touch_mode(private_data_t *client_private_data, u32 user_size,
 		      unsigned long arg);
 
