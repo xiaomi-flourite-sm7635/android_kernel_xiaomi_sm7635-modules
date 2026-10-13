@@ -2645,6 +2645,20 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 	int ret = 0;
 	struct clk *lpass_audio_hw_vote = NULL;
 	const struct of_device_id *match;
+#ifdef CONFIG_SND_SOC_FLOURITE
+	struct device_node *amp;
+	int expected_smartpa = 0;
+
+	/* The stock DT shares these nodes between TFA and Awinic assemblies. */
+	for_each_compatible_node(amp, NULL, "awinic,aw884xx_smartpa") {
+		if (of_device_is_available(amp))
+			expected_smartpa++;
+	}
+	if (expected_smartpa && smartpa_count != expected_smartpa)
+		return dev_err_probe(&pdev->dev, -EPROBE_DEFER,
+			"Waiting for smartpa codecs (%d/%d)\n",
+			smartpa_count, expected_smartpa);
+#endif
 	if (!pdev->dev.of_node) {
 		dev_err(&pdev->dev, "%s: No platform supplied from device tree\n", __func__);
 		return -EINVAL;
