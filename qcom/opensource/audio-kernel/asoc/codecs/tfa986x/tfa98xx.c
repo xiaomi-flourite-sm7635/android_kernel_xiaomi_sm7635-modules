@@ -3198,8 +3198,17 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 	unsigned int reg;
 	int ret;
 	int retry_count = 30;
+#ifdef CONFIG_SND_SOC_FLOURITE
+	bool shared_binding = of_device_is_compatible(np, "awinic,aw884xx_smartpa");
+#endif
 
 	pr_info("addr=0x%x\n", i2c->addr);
+
+#ifdef CONFIG_SND_SOC_FLOURITE
+	/* Never claim the alternate Awinic chip without checking the TFA ID. */
+	if (shared_binding && (no_start || no_reset))
+		return -EINVAL;
+#endif
 
 	if (!i2c_check_functionality(i2c->adapter, I2C_FUNC_I2C)) {
 		dev_err(&i2c->dev, "check_functionality failed\n");
@@ -3288,6 +3297,11 @@ static int tfa98xx_i2c_probe(struct i2c_client *i2c,
 				ret);
 			return -EIO;
 		}
+#ifdef CONFIG_SND_SOC_FLOURITE
+		if (shared_binding && (reg & 0xff) != 0x66)
+			return dev_err_probe(&i2c->dev, -ENODEV,
+				"Shared smartpa node is not a TFA986x (0x%x)\n", reg);
+#endif
 		switch (reg & 0xff) {
 		case 0x72: /* tfa9872 */
 			pr_info("TFA9872 detected\n");
@@ -3502,12 +3516,18 @@ modify for kernel6.X */
 
 static const struct i2c_device_id tfa98xx_i2c_id[] = {
 	{ "tfa98xx", 0 },
+#ifdef CONFIG_SND_SOC_FLOURITE
+	{ "aw884xx_smartpa", 0 },
+#endif
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, tfa98xx_i2c_id);
 
 #ifdef CONFIG_OF
 static struct of_device_id tfa98xx_dt_match[] = {
+#ifdef CONFIG_SND_SOC_FLOURITE
+	{.compatible = "awinic,aw884xx_smartpa" },
+#endif
 	{.compatible = "tfa,tfa98xx" },
 	{.compatible = "tfa,tfa9872" },
 	{.compatible = "tfa,tfa9873" },
@@ -3577,4 +3597,3 @@ module_exit(tfa98xx_i2c_exit);
 
 MODULE_DESCRIPTION("ASoC TFA98XX driver");
 MODULE_LICENSE("GPL");
-
