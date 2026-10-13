@@ -1858,7 +1858,12 @@ void nvt_ts_wakeup_gesture_report(uint8_t gesture_id, uint8_t *data)
 	case GESTURE_DOUBLE_CLICK:
 		NVT_LOG("Gesture : Double Click.\n");
 		if (ts->gesture_command & 0x01) {
+#ifdef CONFIG_TOUCHSCREEN_FLOURITE
+			/* Flourite's ROM consumes the stock input wake event. */
+			keycode = KEY_WAKEUP;
+#else
 			notify_gesture_double_tap();
+#endif
 		} else {
 			NVT_LOG("Gesture : Double Click Not Enable.\n");
 		}
