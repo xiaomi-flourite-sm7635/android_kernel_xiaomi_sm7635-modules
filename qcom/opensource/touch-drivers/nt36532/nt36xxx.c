@@ -1793,7 +1793,8 @@ static void nvt_flash_proc_deinit(void)
 
 extern int update_fod_press_status(int value);
 
-void nvt_ts_fod_down_report(uint16_t fod_x, uint16_t fod_y)
+/* Super-resolution coordinates exceed 16 bits, including the FOD region. */
+void nvt_ts_fod_down_report(uint32_t fod_x, uint32_t fod_y)
 {
 	ts->fod_finger = true;
 	update_fod_press_status(1);
