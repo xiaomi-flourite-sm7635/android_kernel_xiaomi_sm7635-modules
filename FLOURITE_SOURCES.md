@@ -1,7 +1,4 @@
-# flourite experimental source-module integration
-
-This is an isolated test branch, not a change to the Fairphone checkout or to
-the normal flourite ROM/prebuilt selection. No runtime success is implied.
+# Flourite module sources
 
 Base: LineageOS/android_kernel_fairphone_sm7635-modules,
 `3adc0650fc8809a097915b89e9590dd9f39a7796`.
@@ -19,27 +16,6 @@ Replaced components (complete public source drops, not stock `.ko` files):
 MiCode inputs use `flourite-v-oss`. The touch input is a porting reference,
 not an official flourite release. Original license/copyright notices are
 retained; availability on a public repository is not a new license grant.
-
-Local adaptations:
-
-- Build flourite NT38771/Xiaomi touch modules, with the 6.1 class_create API.
-  Use P16U firmware/config names and stock GPIO1/GPIO2 panel selection.
-  VOX firmware revision is selected from lockdown bytes 6/7 (72:21 -> 00,
-  otherwise 01); do not guess if lockdown cannot be read. The selection was
-  checked against flourite stock nt38771_touch.ko, BuildID
-  2b63502952fe069abf259456a1abf6d0ad5c5bb0. Source tree paths/register maps
-  and the THP daemon ABI still require real-device testing.
-- Use flourite display's doubleclick-enable export for the touch gesture flag.
-- Allocate the camera message item off-stack; validate message field lengths
-  and reject incomplete userspace copies. This addresses a build-time stack
-  limit, not a proven diagnosis of the reported camera reboot.
-- Build the msm_video frontend only for flourite; both video frontends share
-  object paths and must not compile concurrently. Supply iris2 sizing macros.
-- Use external IPA/RMNET header paths, and select the P16U BDF filenames in
-  ICNSS without inventing project IDs for unrelated Xiaomi devices.
-- Include the FTM cfg80211 object selected by CONFIG_QCA_WIFI_FTM_NL80211,
-  and include the kernel HWID header for flourite WLAN.
-- Scope the Bluetooth power-source ioctl's local variable to its switch case.
 
 All modules must be rebuilt with the matching Xiaomi source kernel, compiler,
 configuration, Module.symvers and signing certificate. Do not combine these
