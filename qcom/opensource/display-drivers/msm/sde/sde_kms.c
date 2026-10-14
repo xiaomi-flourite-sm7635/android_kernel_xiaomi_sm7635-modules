@@ -2272,6 +2272,34 @@ static void _sde_kms_drm_obj_destroy(struct sde_kms *sde_kms)
 	_sde_kms_release_displays(sde_kms);
 }
 
+static void _sde_kms_setup_encoder_clones(struct sde_kms *sde_kms)
+{
+	struct drm_encoder *encoder, *clone;
+	struct drm_device *dev = sde_kms->dev;
+	struct sde_mdss_cfg *catalog = sde_kms->catalog;
+
+	drm_for_each_encoder(encoder, dev)
+		encoder->possible_clones = drm_encoder_mask(encoder);
+
+	if (!test_bit(SDE_FEATURE_CWB, catalog->features) &&
+			!test_bit(SDE_FEATURE_DEDICATED_CWB, catalog->features))
+		return;
+
+	/* CWB shares a CRTC between a display encoder and a writeback encoder. */
+	drm_for_each_encoder(encoder, dev) {
+		if (encoder->encoder_type != DRM_MODE_ENCODER_VIRTUAL)
+			continue;
+
+		drm_for_each_encoder(clone, dev) {
+			if (clone->encoder_type == DRM_MODE_ENCODER_VIRTUAL)
+				continue;
+
+			encoder->possible_clones |= drm_encoder_mask(clone);
+			clone->possible_clones |= drm_encoder_mask(encoder);
+		}
+	}
+}
+
 static int _sde_kms_drm_obj_init(struct sde_kms *sde_kms)
 {
 	struct drm_device *dev;
@@ -2376,6 +2404,8 @@ static int _sde_kms_drm_obj_init(struct sde_kms *sde_kms)
 	/* All CRTCs are compatible with all encoders */
 	for (i = 0; i < priv->num_encoders; i++)
 		priv->encoders[i]->possible_crtcs = (1 << priv->num_crtcs) - 1;
+
+	_sde_kms_setup_encoder_clones(sde_kms);
 
 	return 0;
 fail:
