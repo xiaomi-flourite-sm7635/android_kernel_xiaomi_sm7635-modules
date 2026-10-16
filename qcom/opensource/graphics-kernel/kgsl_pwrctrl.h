@@ -182,6 +182,11 @@ struct kgsl_pwrctrl {
 	bool rt_bus_hint_active;
 	/** @wake_on_touch: If true our last wakeup was due to a touch event */
 	bool wake_on_touch;
+	/* Parts constraints, serialized by device->mutex; cleared on driver init. */
+	bool parts_enabled;
+	bool parts_thermal_bypass;
+	unsigned int parts_ceiling;
+	unsigned int parts_floor;
 };
 
 int kgsl_pwrctrl_init(struct kgsl_device *device);

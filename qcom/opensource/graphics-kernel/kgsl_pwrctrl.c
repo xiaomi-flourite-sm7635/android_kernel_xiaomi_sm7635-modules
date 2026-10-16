@@ -85,6 +85,17 @@ static unsigned int _adjust_pwrlevel(struct kgsl_pwrctrl *pwr, int level,
 	min_pwrlevel = max_t(unsigned int, min_pwrlevel,
 					pwr->thermal_pwrlevel);
 
+	if (pwr->parts_enabled) {
+		if (pwr->parts_thermal_bypass) {
+			max_pwrlevel = pwr->parts_ceiling;
+			min_pwrlevel = pwr->parts_floor;
+		} else {
+			max_pwrlevel = max(max_pwrlevel, pwr->parts_ceiling);
+			min_pwrlevel = max(max_pwrlevel,
+				min(min_pwrlevel, pwr->parts_floor));
+		}
+	}
+
 	switch (pwrc->type) {
 	case KGSL_CONSTRAINT_PWRLEVEL: {
 		switch (pwrc->sub_type) {
@@ -1081,6 +1092,117 @@ static ssize_t pwrscale_show(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%u\n", psc->enabled);
 }
 
+/* Separate manual constraints: ordinary clients keep their own requests. */
+static ssize_t parts_limits_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	unsigned int floor, ceiling;
+	ssize_t len;
+
+	mutex_lock(&device->mutex);
+	floor = pwr->parts_enabled ? pwr->parts_floor : pwr->min_render_pwrlevel;
+	ceiling = pwr->parts_enabled ? pwr->parts_ceiling : 0;
+	len = sysfs_emit(buf, "%u %u %u\n", pwr->parts_enabled,
+		pwr->pwrlevels[floor].gpu_freq,
+		pwr->pwrlevels[ceiling].gpu_freq);
+	mutex_unlock(&device->mutex);
+	return len;
+}
+
+static ssize_t parts_limits_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	unsigned int values[3], n = 0, i;
+	int floor = -1, ceiling = -1, ret = -EINVAL;
+	char *input = kstrdup(buf, GFP_KERNEL), *cursor = input, *token;
+
+	if (!input)
+		return -ENOMEM;
+	while ((token = strsep(&cursor, " \t\n"))) {
+		if (!*token)
+			continue;
+		if (n == ARRAY_SIZE(values) || kstrtouint(token, 10, &values[n]))
+			goto out;
+		n++;
+	}
+	if (!((n == 1 && values[0] == 0) ||
+	      (n == 3 && values[0] == 1 && values[1] && values[1] <= values[2])))
+		goto out;
+	mutex_lock(&device->mutex);
+	if (values[0]) {
+		for (i = 0; i <= pwr->min_render_pwrlevel; i++) {
+			if (pwr->pwrlevels[i].gpu_freq == values[1])
+				floor = i;
+			if (pwr->pwrlevels[i].gpu_freq == values[2])
+				ceiling = i;
+		}
+		if (floor < 0 || ceiling < 0 || ceiling > floor)
+			goto unlock;
+		pwr->parts_floor = floor;
+		pwr->parts_ceiling = ceiling;
+	}
+	pwr->parts_enabled = values[0];
+	kgsl_pwrctrl_pwrlevel_change(device, pwr->active_pwrlevel);
+	ret = count;
+unlock:
+	mutex_unlock(&device->mutex);
+out:
+	kfree(input);
+	return ret;
+}
+
+static ssize_t parts_thermal_bypass_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	ssize_t len;
+
+	mutex_lock(&device->mutex);
+	len = sysfs_emit(buf, "%u\n", device->pwrctrl.parts_thermal_bypass);
+	mutex_unlock(&device->mutex);
+	return len;
+}
+
+static ssize_t parts_thermal_bypass_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	bool requested;
+	int ret = kstrtobool(buf, &requested);
+
+	if (ret)
+		return ret;
+	mutex_lock(&device->mutex);
+	device->pwrctrl.parts_thermal_bypass = requested;
+	kgsl_pwrctrl_pwrlevel_change(device, device->pwrctrl.active_pwrlevel);
+	mutex_unlock(&device->mutex);
+	return count;
+}
+
+static ssize_t parts_effective_limits_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct kgsl_pwr_constraint none = { 0 };
+	ssize_t len;
+
+	mutex_lock(&device->mutex);
+	len = sysfs_emit(buf, "%u %u\n",
+		pwr->pwrlevels[_adjust_pwrlevel(pwr, pwr->min_render_pwrlevel, &none)].gpu_freq,
+		pwr->pwrlevels[_adjust_pwrlevel(pwr, 0, &none)].gpu_freq);
+	mutex_unlock(&device->mutex);
+	return len;
+}
+
+static DEVICE_ATTR_RW(parts_limits);
+static DEVICE_ATTR_RW(parts_thermal_bypass);
+static DEVICE_ATTR_RO(parts_effective_limits);
+
 static DEVICE_ATTR_RO(temp);
 static DEVICE_ATTR_RW(gpuclk);
 static DEVICE_ATTR_RW(max_gpuclk);
@@ -1109,6 +1231,9 @@ static DEVICE_ATTR_RO(freq_table_mhz);
 static DEVICE_ATTR_RW(pwrscale);
 
 static const struct attribute *pwrctrl_attr_list[] = {
+	&dev_attr_parts_limits.attr,
+	&dev_attr_parts_thermal_bypass.attr,
+	&dev_attr_parts_effective_limits.attr,
 	&dev_attr_gpuclk.attr,
 	&dev_attr_max_gpuclk.attr,
 	&dev_attr_idle_timer.attr,
